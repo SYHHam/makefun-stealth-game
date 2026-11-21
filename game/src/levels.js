@@ -17,6 +17,27 @@
 
 export const TILE = 32;
 
+// The five-act campaign, shown in the CAMPAIGN panel on every screen and on
+// the title screen itinerary. Short names are the level name with the act
+// number stripped, so the panel and the title list always agree.
+export const ACT_COUNT = 5;
+export const ACT_ITINERARY = [
+  { n: 1, name: 'HALF-HOUR CALL' },
+  { n: 2, name: 'THE GARDEN SCENE' },
+  { n: 3, name: 'INTERMISSION' },
+  { n: 4, name: 'THE STORM' },
+  { n: 5, name: 'CURTAIN CALL' },
+];
+
+// The gadget kit, shown as icons on the title screen. The labels map to the
+// cue board: COIN is the thrown coin decoy, SMOKE is the FOG DRUM cue, and
+// LANTERN is the FOLLOWSPOT cue. Icons only, no balance change.
+export const GADGETS = [
+  { id: 'coin', label: 'COIN' },
+  { id: 'smoke', label: 'SMOKE' },
+  { id: 'lantern', label: 'LANTERN' },
+];
+
 export const LEVELS = [
   {
     name: 'Act 1: Half-Hour Call',

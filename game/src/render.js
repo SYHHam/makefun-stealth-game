@@ -9,7 +9,7 @@
 // a TV as well as a laptop. Detection is never color alone: every state
 // has an icon and a word label.
 
-import { TILE, tileAt } from './levels.js';
+import { TILE, tileAt, ACT_ITINERARY, GADGETS } from './levels.js';
 import { coneRange, laserActive } from './guards.js';
 import { CUES } from './cues.js';
 
@@ -107,9 +107,15 @@ export function drawGame(ctx, game) {
   drawHUD(ctx, game);
 
   if (game.state === 'paused') drawPause(ctx, game);
-  if (game.state === 'levelComplete') drawLevelComplete(ctx, game);
+  if (game.state === 'intermission') drawIntermission(ctx, game);
+  if (game.state === 'strikeLost') drawStrikeLost(ctx, game);
   if (game.state === 'gameOver') drawGameOver(ctx, game);
   if (game.state === 'victory') drawVictory(ctx, game);
+
+  // The campaign panel rides on top of every non-title screen, so the
+  // five-act structure is visible in play, on pause, and on every result
+  // screen. It is anchored to the left edge, inside the safe inset.
+  drawCampaignPanel(ctx, game);
 }
 
 function drawWorld(ctx, game) {
@@ -561,6 +567,97 @@ function bar(ctx, x, y, w, h, frac, fill, label, fontPx) {
   }
 }
 
+// The CAMPAIGN panel: the five-act itinerary, always visible. The current
+// act is highlighted, completed acts are checked, future acts are muted.
+// Below the list: score pages, campaign score, surviving strikes, and heat.
+// Anchored to the left edge, below the goal and message lines, inside the
+// safe inset, so it never overlaps the world view or the HUD text above it.
+function drawCampaignPanel(ctx, game) {
+  const h = game.hud;
+  const s = uiScale(game);
+  const x = Math.round(16 * s);
+  const y = Math.round(160 * s);
+  const w = Math.round(200 * s);
+  const ph = Math.round(208 * s);
+  const f = (size) => Math.round(size * s) + 'px';
+
+  ctx.fillStyle = 'rgba(18, 10, 10, 0.92)';
+  ctx.fillRect(x, y, w, ph);
+  ctx.strokeStyle = '#c9a227';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, ph - 1);
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#f5e6a3';
+  ctx.font = 'bold ' + f(14) + ' sans-serif';
+  ctx.fillText('CAMPAIGN  ACT ' + (game.levelIndex + 1) + ' / 5', x + 10 * s, y + 18 * s);
+
+  let ry = y + 40 * s;
+  const rowStep = 21 * s;
+  ACT_ITINERARY.forEach((act, i) => {
+    const done = h.completedActs[i];
+    const current = i === game.levelIndex;
+    if (current) {
+      ctx.fillStyle = '#7a1020';
+      ctx.fillRect(x + 2, ry - 15 * s, w - 4, rowStep - 2);
+    }
+    ctx.globalAlpha = done || current ? 1 : 0.45;
+    ctx.fillStyle = done ? '#f5d76e' : '#e8d27a';
+    ctx.font = 'bold ' + f(12) + ' sans-serif';
+    const mark = done ? '✓ ' : (current ? '▶ ' : '· ');
+    let label = mark + act.n + '  ' + act.name;
+    while (ctx.measureText(label).width > w - 16 * s && label.length > 4) {
+      label = label.slice(0, -1);
+    }
+    ctx.fillText(label, x + 8 * s, ry);
+    ctx.globalAlpha = 1;
+    ry += rowStep;
+  });
+
+  const dy = y + 136 * s;
+  ctx.strokeStyle = '#c9a227';
+  ctx.beginPath();
+  ctx.moveTo(x + 8 * s, dy);
+  ctx.lineTo(x + w - 8 * s, dy);
+  ctx.stroke();
+  ctx.fillStyle = '#f5e6a3';
+  ctx.font = 'bold ' + f(12) + ' sans-serif';
+  ctx.fillText('SCORE PAGES ' + h.pages + ' / 5', x + 8 * s, y + 152 * s);
+  ctx.fillStyle = '#d8c8a8';
+  ctx.font = f(12) + ' sans-serif';
+  ctx.fillText('SCORE ' + h.score, x + 8 * s, y + 168 * s);
+
+  // Strikes: filled pips are the strikes still held, red X are spent.
+  ctx.fillStyle = '#f5e6a3';
+  ctx.font = 'bold ' + f(12) + ' sans-serif';
+  ctx.fillText('STRIKES', x + 8 * s, y + 184 * s);
+  for (let i = 0; i < 3; i++) {
+    const px = x + 76 * s + i * 18 * s;
+    const py = y + 178 * s;
+    if (i < h.strikes) {
+      ctx.fillStyle = '#f5d76e';
+      ctx.beginPath();
+      ctx.arc(px, py, 5 * s, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = '#ff2e4d';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(px - 4 * s, py - 4 * s);
+      ctx.lineTo(px + 4 * s, py + 4 * s);
+      ctx.moveTo(px + 4 * s, py - 4 * s);
+      ctx.lineTo(px - 4 * s, py + 4 * s);
+      ctx.stroke();
+    }
+  }
+
+  // Heat bar.
+  ctx.fillStyle = '#f5e6a3';
+  ctx.font = 'bold ' + f(11) + ' sans-serif';
+  ctx.fillText('HEAT ' + h.heat + '%', x + 8 * s, y + 200 * s);
+  bar(ctx, x + 76 * s, y + 192 * s, w - 84 * s, 8 * s, h.heat / 100, h.heat > 70 ? '#ff2e4d' : '#c9a227', '', 11);
+}
+
 function drawHUD(ctx, game) {
   const h = game.hud;
   const s = uiScale(game);
@@ -676,8 +773,6 @@ function drawHUD(ctx, game) {
   y += 26 * s;
   ctx.fillStyle = '#d8c8a8';
   ctx.font = body;
-  ctx.fillText('Score pages: ' + h.pages + ' / 5', lx, y);
-  y += 16 * s;
   ctx.fillText('Spotted: ' + h.spotted + ' times', lx, y);
   y += 16 * s;
   ctx.fillText('Coins left: ' + h.coins, lx, y);
@@ -771,13 +866,58 @@ function drawTitle(ctx, game) {
   }
   ctx.fillStyle = '#c9a227';
   ctx.fillRect(cx - halfW, cy - 92, halfW * 2, 3);
-  centerText(ctx, game, 'PROMPT SIDE', cy - 110, 'bold ' + Math.round(64 * s) + 'px serif', '#f5e6a3');
-  centerText(ctx, game, 'Steal the Composer\'s score from a grand 1890s opera house, mid-performance,', cy - 40, Math.round(17 * s) + 'px sans-serif', '#d8c8a8');
-  centerText(ctx, game, 'and turn the stage lighting board into your weapon.', cy - 14, Math.round(17 * s) + 'px sans-serif', '#d8c8a8');
-  centerText(ctx, game, 'WASD move   Shift sneak   Space sprint   E interact   Click throws a coin   1-4 fire cues', cy + 30, Math.round(14 * s) + 'px sans-serif', '#e8d27a');
-  centerText(ctx, game, 'Cues: 1 BLACKOUT  2 THUNDER SHEET  3 FOG DRUM  4 FOLLOWSPOT', cy + 56, Math.round(14 * s) + 'px sans-serif', '#e8d27a');
-  centerText(ctx, game, 'Click or press Enter to start Act 1', cy + 96, 'bold ' + Math.round(18 * s) + 'px sans-serif', '#f5e6a3');
-  centerText(ctx, game, 'Five acts. Steal the score, reach the exit, never get caught.', cy + 124, Math.round(13 * s) + 'px sans-serif', '#8a7a5a');
+  centerText(ctx, game, 'PROMPT SIDE', cy - 240, 'bold ' + Math.round(64 * s) + 'px serif', '#f5e6a3');
+  centerText(ctx, game, 'Steal the Composer\'s score from a grand 1890s opera house, mid-performance,', cy - 180, Math.round(17 * s) + 'px sans-serif', '#d8c8a8');
+  centerText(ctx, game, 'and turn the stage lighting board into your weapon.', cy - 154, Math.round(17 * s) + 'px sans-serif', '#d8c8a8');
+  // The five-act itinerary, so the campaign is visible before play starts.
+  centerText(ctx, game, 'FIVE ACTS', cy - 100, 'bold ' + Math.round(15 * s) + 'px sans-serif', '#f5e6a3');
+  ACT_ITINERARY.forEach((act, i) => {
+    centerText(ctx, game, act.n + '  ' + act.name, cy - 70 + i * 26 * s, Math.round(15 * s) + 'px sans-serif', '#d8c8a8');
+  });
+  // The gadget kit, drawn as icons with labels beneath.
+  const gy = cy + 70;
+  const gadgetX = [cx - 120 * s, cx, cx + 120 * s];
+  GADGETS.forEach((gadget, i) => {
+    const gx = gadgetX[i];
+    if (gadget.id === 'coin') {
+      ctx.fillStyle = '#f5d76e';
+      ctx.beginPath();
+      ctx.arc(gx, gy, 10 * s, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#8a6d3b';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else if (gadget.id === 'smoke') {
+      ctx.strokeStyle = '#c8c8d2';
+      ctx.lineWidth = 2;
+      for (let a = 0; a < 3; a++) {
+        ctx.beginPath();
+        ctx.arc(gx - 8 * s + a * 8 * s, gy + 4 * s, 7 * s, Math.PI, 0);
+        ctx.stroke();
+      }
+    } else {
+      ctx.fillStyle = '#c9a227';
+      ctx.fillRect(gx - 7 * s, gy - 8 * s, 14 * s, 16 * s);
+      ctx.fillStyle = 'rgba(245, 220, 140, 0.5)';
+      ctx.beginPath();
+      ctx.moveTo(gx - 5 * s, gy + 8 * s);
+      ctx.lineTo(gx + 5 * s, gy + 8 * s);
+      ctx.lineTo(gx + 12 * s, gy + 22 * s);
+      ctx.lineTo(gx - 12 * s, gy + 22 * s);
+      ctx.closePath();
+      ctx.fill();
+    }
+    // Labels are drawn at each icon's own x, not at the screen centre.
+    ctx.fillStyle = '#d8c8a8';
+    ctx.font = Math.round(12 * s) + 'px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(gadget.label, gx, gy + 36 * s);
+    ctx.textAlign = 'left';
+  });
+  centerText(ctx, game, 'WASD move   Shift sneak   Space sprint   E interact   Click throws a coin   1-4 fire cues', cy + 140, Math.round(14 * s) + 'px sans-serif', '#e8d27a');
+  centerText(ctx, game, 'Cues: 1 BLACKOUT  2 THUNDER SHEET  3 FOG DRUM  4 FOLLOWSPOT', cy + 166, Math.round(14 * s) + 'px sans-serif', '#e8d27a');
+  centerText(ctx, game, 'Click or press Enter to start Act 1', cy + 206, 'bold ' + Math.round(18 * s) + 'px sans-serif', '#f5e6a3');
+  centerText(ctx, game, 'Five acts. Steal the score, reach the exit, never get caught.', cy + 234, Math.round(13 * s) + 'px sans-serif', '#8a7a5a');
 }
 
 function drawPause(ctx, game) {
@@ -787,15 +927,57 @@ function drawPause(ctx, game) {
   centerText(ctx, game, 'Esc to resume   R to retry the act   M to mute', game.canvasH / 2 + 10, Math.round(16 * s) + 'px sans-serif', '#d8c8a8');
 }
 
-function drawLevelComplete(ctx, game) {
+function drawIntermission(ctx, game) {
+  const s = uiScale(game);
+  const sum = game.actSummary();
+  overlay(ctx, game);
+  const cx = game.canvasW / 2;
+  const cardW = Math.min(600, game.canvasW - 2 * SAFE);
+  const cardX = cx - cardW / 2;
+  const cardY = 140 * s;
+  const cardH = 440 * s;
+  ctx.fillStyle = '#160d0d';
+  ctx.fillRect(cardX, cardY, cardW, cardH);
+  ctx.strokeStyle = '#c9a227';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cardX + 0.5, cardY + 0.5, cardW - 1, cardH - 1);
+  centerText(ctx, game, 'INTERMISSION', cardY + 52 * s, 'bold ' + Math.round(36 * s) + 'px serif', '#f5e6a3');
+  centerText(ctx, game, 'ACT ' + sum.act + ' COMPLETE  |  ' + sum.name, cardY + 88 * s, Math.round(17 * s) + 'px sans-serif', '#d8c8a8');
+  let y = cardY + 128 * s;
+  const rowStep = 26 * s;
+  ACT_ITINERARY.forEach((act, i) => {
+    const done = sum.completedActs[i];
+    const current = i === sum.act;
+    ctx.fillStyle = done ? '#f5d76e' : '#8a7a5a';
+    ctx.font = (current ? 'bold ' : '') + Math.round(15 * s) + 'px sans-serif';
+    ctx.textAlign = 'left';
+    const mark = done ? '✓ ' : (current ? '▶ ' : '· ');
+    ctx.fillText(mark + act.n + '  ' + act.name, cardX + 60 * s, y);
+    ctx.textAlign = 'left';
+    y += rowStep;
+  });
+  y += 8 * s;
+  centerText(ctx, game, 'ACT PAGES ' + sum.actPages + ' / 1    SCORE PAGES ' + sum.campaignPages + ' / 5', y, Math.round(15 * s) + 'px sans-serif', '#e8d27a');
+  y += 28 * s;
+  centerText(ctx, game, 'SCORE ' + sum.score + '    STRIKES ' + sum.strikes + ' / 3    HEAT ' + sum.heat + '%', y, Math.round(15 * s) + 'px sans-serif', '#f5e6a3');
+  y += 36 * s;
+  const nextAct = ACT_ITINERARY[sum.next - 1];
+  centerText(ctx, game, 'NEXT: ACT ' + sum.next + '  ' + (nextAct ? nextAct.name : ''), y, 'bold ' + Math.round(17 * s) + 'px sans-serif', '#f5e6a3');
+  y += 32 * s;
+  centerText(ctx, game, 'Press Enter to continue', y, Math.round(15 * s) + 'px sans-serif', '#d8c8a8');
+}
+
+function drawStrikeLost(ctx, game) {
   const s = uiScale(game);
   overlay(ctx, game);
   const cy = game.canvasH / 2;
-  centerText(ctx, game, 'ACT COMPLETE', cy - 60, 'bold ' + Math.round(44 * s) + 'px serif', '#f5e6a3');
-  centerText(ctx, game, game.level.name, cy - 20, Math.round(20 * s) + 'px sans-serif', '#d8c8a8');
-  centerText(ctx, game, 'Score page stolen' + (game.ghostThisLevel ? '  |  GHOST bonus +500, never spotted' : ''), cy + 12, Math.round(16 * s) + 'px sans-serif', '#e8d27a');
-  centerText(ctx, game, 'Score: ' + game.score, cy + 44, Math.round(16 * s) + 'px sans-serif', '#f5e6a3');
-  centerText(ctx, game, 'Press Enter for the next act', cy + 84, 'bold ' + Math.round(17 * s) + 'px sans-serif', '#f5e6a3');
+  const reason = game.strikeReason === 'caught' ? 'CAUGHT BY A GUARD'
+    : game.strikeReason === 'camera' ? 'CAMERA TRIP'
+    : game.strikeReason === 'laser' ? 'LASER TRIP' : 'SPOTTED';
+  centerText(ctx, game, 'STRIKE SPENT', cy - 60, 'bold ' + Math.round(44 * s) + 'px serif', '#f5a623');
+  centerText(ctx, game, reason, cy - 20, Math.round(19 * s) + 'px sans-serif', '#d8c8a8');
+  centerText(ctx, game, 'Strikes left: ' + game.strikes + ' / 3    Heat: ' + game.heat + '%', cy + 12, Math.round(16 * s) + 'px sans-serif', '#f5e6a3');
+  centerText(ctx, game, 'The act restarts. Press Enter.', cy + 52, Math.round(16 * s) + 'px sans-serif', '#d8c8a8');
 }
 
 function drawGameOver(ctx, game) {
@@ -804,16 +986,36 @@ function drawGameOver(ctx, game) {
   const cy = game.canvasH / 2;
   centerText(ctx, game, 'THE CURTAIN DROPS', cy - 60, 'bold ' + Math.round(44 * s) + 'px serif', '#ff2e4d');
   centerText(ctx, game, game.loseReason || 'You were caught.', cy - 20, Math.round(19 * s) + 'px sans-serif', '#d8c8a8');
-  centerText(ctx, game, 'Score: ' + game.score + '   Acts finished: ' + game.levelIndex, cy + 12, Math.round(16 * s) + 'px sans-serif', '#f5e6a3');
-  centerText(ctx, game, 'Press R to retry the act, or Enter to start over', cy + 52, Math.round(16 * s) + 'px sans-serif', '#d8c8a8');
+  centerText(ctx, game, 'Score: ' + game.score + '   Acts finished: ' + game.completedActs.filter(Boolean).length + ' / 5   Score pages: ' + game.pages + ' / 5', cy + 12, Math.round(16 * s) + 'px sans-serif', '#f5e6a3');
+  centerText(ctx, game, 'Strikes: ' + game.strikes + ' / 3   Heat: ' + game.heat + '%', cy + 40, Math.round(16 * s) + 'px sans-serif', '#d8c8a8');
+  centerText(ctx, game, 'Press R to retry the act, or Enter to start over', cy + 80, Math.round(16 * s) + 'px sans-serif', '#d8c8a8');
 }
 
 function drawVictory(ctx, game) {
   const s = uiScale(game);
   overlay(ctx, game);
   const cy = game.canvasH / 2;
-  centerText(ctx, game, 'CURTAIN CALL', cy - 60, 'bold ' + Math.round(48 * s) + 'px serif', '#f5e6a3');
-  centerText(ctx, game, 'The full Score is yours. The house never knew you were there.', cy - 20, Math.round(18 * s) + 'px sans-serif', '#d8c8a8');
-  centerText(ctx, game, 'Final score: ' + game.score + '   Times spotted: ' + game.spotted, cy + 16, Math.round(17 * s) + 'px sans-serif', '#f5e6a3');
-  centerText(ctx, game, 'Press Enter to play again', cy + 56, 'bold ' + Math.round(17 * s) + 'px sans-serif', '#f5e6a3');
+  const total = game.totalTime;
+  const mins = Math.floor(total / 60);
+  const secs = Math.floor(total % 60).toString().padStart(2, '0');
+  centerText(ctx, game, 'CURTAIN CALL', cy - 100, 'bold ' + Math.round(48 * s) + 'px serif', '#f5e6a3');
+  centerText(ctx, game, 'The full Score is yours. The house never knew you were there.', cy - 60, Math.round(18 * s) + 'px sans-serif', '#d8c8a8');
+  let y = cy - 16;
+  const rowStep = 24 * s;
+  ACT_ITINERARY.forEach((act) => {
+    ctx.fillStyle = '#f5d76e';
+    ctx.font = Math.round(15 * s) + 'px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('✓ ' + act.n + '  ' + act.name, game.canvasW / 2, y);
+    ctx.textAlign = 'left';
+    y += rowStep;
+  });
+  y += 8 * s;
+  centerText(ctx, game, 'SCORE PAGES 5 / 5', y, 'bold ' + Math.round(17 * s) + 'px sans-serif', '#f5e6a3');
+  y += 30 * s;
+  centerText(ctx, game, 'FINAL SCORE ' + game.score + '   TIME ' + mins + ':' + secs, y, Math.round(17 * s) + 'px sans-serif', '#f5e6a3');
+  y += 30 * s;
+  centerText(ctx, game, 'STRIKES SURVIVING ' + game.strikes + ' / 3   HEAT ' + game.heat + '%   TIMES SPOTTED ' + game.spotted, y, Math.round(15 * s) + 'px sans-serif', '#d8c8a8');
+  y += 36 * s;
+  centerText(ctx, game, 'Press Enter to play again', y, 'bold ' + Math.round(17 * s) + 'px sans-serif', '#f5e6a3');
 }

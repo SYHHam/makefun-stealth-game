@@ -1,7 +1,7 @@
 // PROMPT SIDE: main loop, screen stack, level loading.
-// Screens are a stack: title, playing, paused, levelComplete, gameOver,
-// victory. Only the top screen takes input, and the screen below gets its
-// focus back when the top one closes. The simulation runs on a fixed
+// Screens are a stack: title, playing, paused, intermission, strikeLost,
+// gameOver, victory. Only the top screen takes input, and the screen below
+// gets its focus back when the top one closes. The simulation runs on a fixed
 // timestep (1/60s) decoupled from rendering, so the game plays at the same
 // speed on any display. The canvas buffer is scaled by devicePixelRatio
 // (capped at 2) while CSS dimensions stay fixed, so the game is not blurry.
@@ -10,7 +10,8 @@ import { LEVELS, TILE } from './levels.js';
 import { makeGuard, makeCamera, updateGuard, updateCamera, updateLasers, updatePlayerLight } from './guards.js';
 import { makePlayer, updatePlayer, throwCoin, levelEntities } from './player.js';
 import { makeCueBoard, fireCue, updateCues } from './cues.js';
-import { drawGame, detectionLabel, uiPanelWidth, uiTopHeight } from './render.js';
+import { drawGame, detectionLabel, uiScale, uiPanelWidth, uiTopHeight } from './render.js';
+import { ACT_COUNT } from './levels.js';
 import { makeAudio } from './audio.js';
 import { makeInput } from './input.js';
 
@@ -55,6 +56,19 @@ const game = {
   message: '',
   messageTimer: 0,
   loseReason: '',
+  // Campaign state: persists across acts, resets only when a new run starts.
+  // strikes is the recoverable-mistake budget, heat is the campaign-wide
+  // suspicion that cues and mistakes feed and act completions cool down.
+  // completedActs marks finished acts, actPages counts this act's page,
+  // actTimes records each finished act's time, totalTime sums them.
+  strikes: 3,
+  heat: 0,
+  completedActs: [false, false, false, false, false],
+  actPages: 0,
+  actTimes: [0, 0, 0, 0, 0],
+  totalTime: 0,
+  lastCompletedAct: -1,
+  strikeReason: '',
   audio: makeAudio(),
   input: null,
   // HUD snapshot: discrete HUD values are updated only when a game event
@@ -76,6 +90,11 @@ const game = {
     hasObjective: false,
     levelName: '',
     levelScene: '',
+    strikes: 3,
+    heat: 0,
+    completedActs: [false, false, false, false, false],
+    actPages: 0,
+    totalTime: 0,
   },
 };
 
@@ -111,6 +130,11 @@ game.emitHud = () => {
   h.hasObjective = game.player ? game.player.hasObjective : false;
   h.levelName = game.level.name;
   h.levelScene = game.level.scene;
+  h.strikes = game.strikes;
+  h.heat = game.heat;
+  h.completedActs = game.completedActs.slice();
+  h.actPages = game.actPages;
+  h.totalTime = game.totalTime;
 };
 
 game.setMessage = (text) => {
@@ -149,20 +173,141 @@ game.onSpotted = (kind) => {
   if (game.cues.suspicion >= 100) game.onCurtainDrop();
 };
 
-game.onCaught = () => {
+// Score page pickup hook. player.js calls this instead of doing the score
+// math inline, so the campaign totals stay in one place.
+game.onPagePickup = () => {
+  game.pages += 1;
+  game.actPages += 1;
+  game.score += 250;
+  game.audio.pickup();
+  game.setMessage('Score page stolen. Now reach the exit, unseen.');
+  game.emitHud();
+};
+
+// A recoverable mistake: being caught, tripping a camera, or crossing a
+// laser. Costs one strike and adds heat, then the act restarts with the
+// campaign (strikes, heat, score, pages, finished acts) kept. Losing the
+// last strike, or heat hitting 100, ends the run for good.
+game.loseStrike = (reason) => {
   if (game.state !== 'playing') return;
+  game.strikes -= 1;
+  game.spotted += 1;
+  game.heat = Math.min(100, game.heat + (reason === 'caught' ? 15 : 10));
+  game.strikeReason = reason;
+  game.audio.lose();
+  if (game.strikes <= 0) {
+    game.endRun('Three strikes. The house wants you out.');
+    return;
+  }
+  if (game.heat >= 100) {
+    game.endRun('Heat maxed. The house is boiling.');
+    return;
+  }
+  game.pushScreen('strikeLost');
+  game.emitHud();
+};
+
+// Retry the current act after a strike, keeping the campaign state.
+game.retryActAfterStrike = () => {
+  game.popScreen();
+  loadLevel(game.levelIndex);
+  game.setScreen('playing');
+};
+
+game.endRun = (reason) => {
+  game.loseReason = reason;
   game.setScreen('gameOver');
-  game.loseReason = 'A stagehand caught you under the lights.';
   game.audio.lose();
   game.emitHud();
 };
 
-game.onCurtainDrop = () => {
-  if (game.state !== 'playing') return;
-  game.setScreen('gameOver');
-  game.loseReason = 'House Suspicion hit 100 percent. The curtain drops.';
-  game.audio.lose();
+// Trip a camera or a laser: the caller adds House Suspicion first, then
+// this spends the strike. Called from guards.js.
+game.onTrip = (kind) => {
+  game.loseStrike(kind);
+};
+
+// Summary of the run so far, for the intermission and victory screens.
+game.actSummary = () => ({
+  act: game.levelIndex + 1,
+  name: game.level.name,
+  actPages: game.actPages,
+  campaignPages: game.pages,
+  score: game.score,
+  strikes: game.strikes,
+  heat: game.heat,
+  completedActs: game.completedActs.slice(),
+  next: game.levelIndex + 2,
+});
+
+// Deterministic showcase states for screenshots (?showcase=cover|act1|
+// act2complete|act5). A seeded LCG replaces Math.random for the showcase so
+// camera sweep angles and dust are reproducible. The showcase never changes
+// costs, durations, or detection; it only sets campaign state and level.
+game.applyShowcase = (name) => {
+  let seed = 12345;
+  Math.random = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  if (name === 'cover') {
+    loadLevel(2);
+    game.completedActs = [true, true, false, false, false];
+    game.pages = 3;
+    game.actPages = 1;
+    game.score = 4250;
+    game.strikes = 2;
+    game.heat = 35;
+    game.levelTime = 145;
+    game.cues.suspicion = 42;
+    game.cues.tokens = 3;
+    game.player.coins = 2;
+    game.setScreen('playing');
+  } else if (name === 'act1') {
+    loadLevel(0);
+    game.completedActs = [false, false, false, false, false];
+    game.pages = 1;
+    game.actPages = 1;
+    game.score = 250;
+    game.strikes = 3;
+    game.heat = 0;
+    game.levelTime = 18;
+    game.cues.suspicion = 12;
+    game.cues.tokens = 4;
+    game.player.coins = 2;
+    game.setScreen('playing');
+  } else if (name === 'act2complete') {
+    loadLevel(1);
+    game.completedActs = [true, true, false, false, false];
+    game.pages = 2;
+    game.actPages = 1;
+    game.score = 2600;
+    game.strikes = 2;
+    game.heat = 25;
+    game.actTimes[1] = 96;
+    game.lastCompletedAct = 1;
+    game.pushScreen('intermission');
+  } else if (name === 'act5') {
+    loadLevel(4);
+    game.completedActs = [true, true, true, true, true];
+    game.pages = 5;
+    game.actPages = 1;
+    game.score = 9150;
+    game.strikes = 1;
+    game.heat = 60;
+    game.totalTime = 612;
+    game.lastCompletedAct = 4;
+    game.pushScreen('victory');
+  }
   game.emitHud();
+};
+
+game.onCaught = () => {
+  game.loseStrike('caught');
+};
+
+game.onCurtainDrop = () => {
+  game.endRun('House Suspicion hit 100 percent. The curtain drops.');
 };
 
 game.onLevelComplete = () => {
@@ -172,8 +317,17 @@ game.onLevelComplete = () => {
   if (game.ghostThisLevel) bonus += 500;
   bonus += Math.max(0, 300 - Math.floor(game.levelTime));
   game.score += bonus;
+  game.completedActs[game.levelIndex] = true;
+  game.actTimes[game.levelIndex] = game.levelTime;
+  game.totalTime += game.levelTime;
+  game.lastCompletedAct = game.levelIndex;
+  game.heat = Math.max(0, game.heat - 10);
   game.audio.win();
-  game.pushScreen('levelComplete');
+  if (game.levelIndex >= LEVELS.length - 1) {
+    game.pushScreen('victory');
+  } else {
+    game.pushScreen('intermission');
+  }
   game.emitHud();
 };
 
@@ -216,6 +370,7 @@ function loadLevel(index) {
   game.particles = [];
   game.spottedThisLevel = false;
   game.ghostThisLevel = false;
+  game.actPages = 0;
   game.levelTime = 0;
   game.message = '';
   game.messageTimer = 0;
@@ -228,15 +383,19 @@ function startGame() {
   game.score = 0;
   game.pages = 0;
   game.spotted = 0;
+  game.strikes = 3;
+  game.heat = 0;
+  game.completedActs = [false, false, false, false, false];
+  game.actPages = 0;
+  game.actTimes = [0, 0, 0, 0, 0];
+  game.totalTime = 0;
+  game.lastCompletedAct = -1;
+  game.strikeReason = '';
   loadLevel(0);
   game.setScreen('playing');
 }
 
 function nextLevel() {
-  if (game.levelIndex >= LEVELS.length - 1) {
-    game.setScreen('victory');
-    return;
-  }
   game.popScreen();
   loadLevel(game.levelIndex + 1);
   game.setScreen('playing');
@@ -246,15 +405,22 @@ function fitView() {
   if (!game.grid.length || !game.grid[0]) return;
   const gridW = game.grid[0].length * TILE;
   const gridH = game.grid.length * TILE;
-  // The world view fits the space left after the anchored HUD: the side
-  // panel on the right and the scaled top area. Both scale with the UI.
+  // The world view fits the space left after the anchored HUD: the campaign
+  // panel on the left, the side panel on the right, and the scaled top area
+  // (top bar plus goal and message lines). At the 1280x720 reference the
+  // rect is left 232, top 112, right 984, bottom 712, so the world never
+  // slides under the campaign panel or the goal and message lines.
+  const s = uiScale(game);
   const panelW = uiPanelWidth(game);
   const topH = uiTopHeight(game);
-  const availW = Math.max(200, game.canvasW - panelW - 16);
-  const availH = Math.max(200, game.canvasH - topH - 8);
+  const left = Math.round(232 * s);
+  const right = game.canvasW - panelW - 8;
+  const bottom = game.canvasH - 8;
+  const availW = Math.max(200, right - left);
+  const availH = Math.max(200, bottom - topH);
   const scale = Math.min(availW / gridW, availH / gridH);
   game.view.scale = scale;
-  game.view.ox = 8 + (availW - gridW * scale) / 2;
+  game.view.ox = left + (availW - gridW * scale) / 2;
   game.view.oy = topH + (availH - gridH * scale) / 2;
 }
 
@@ -284,16 +450,18 @@ game.input = makeInput(canvas, {
     game.audio.ensure();
     if (code === 'Enter') {
       if (game.state === 'title') startGame();
-      else if (game.state === 'levelComplete') nextLevel();
+      else if (game.state === 'intermission') nextLevel();
+      else if (game.state === 'strikeLost') game.retryActAfterStrike();
       else if (game.state === 'gameOver') startGame();
       else if (game.state === 'victory') startGame();
     }
     if (code === 'Escape') {
       if (game.state === 'playing') game.pushScreen('paused');
       else if (game.state === 'paused') game.popScreen();
+      else if (game.state === 'strikeLost') game.retryActAfterStrike();
     }
     if (code === 'KeyR') {
-      if (game.state === 'playing' || game.state === 'paused' || game.state === 'gameOver') {
+      if (game.state === 'playing' || game.state === 'paused' || game.state === 'gameOver' || game.state === 'strikeLost') {
         loadLevel(game.levelIndex);
         game.setScreen('playing');
       }
@@ -395,7 +563,12 @@ function frame(now) {
 }
 
 resize();
-loadLevel(0);
-game.setScreen('title');
+const showcase = new URLSearchParams(location.search).get('showcase');
+if (showcase) {
+  game.applyShowcase(showcase);
+} else {
+  loadLevel(0);
+  game.setScreen('title');
+}
 window.__game = game;
 requestAnimationFrame(frame);

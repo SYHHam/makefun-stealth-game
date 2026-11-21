@@ -122,11 +122,7 @@ export function updatePlayer(game, dt) {
     if (obj.near && input.consumeInteract()) {
       obj.taken = true;
       p.hasObjective = true;
-      game.pages += 1;
-      game.score += 250;
-      game.audio.pickup();
-      game.setMessage('Score page stolen. Now reach the exit, unseen.');
-      if (game.emitHud) game.emitHud();
+      game.onPagePickup();
     }
   }
 

@@ -231,6 +231,7 @@ export function updateCamera(game, cam, dt) {
         nearest.detect = 0.6;
         nearest.lastSeen = { x: p.x, y: p.y };
       }
+      game.onTrip('camera');
     }
   } else {
     cam.detect = Math.max(0, cam.detect - dt * 0.4);
@@ -269,6 +270,7 @@ export function updateLasers(game, dt) {
           g.lastSeen = { x: p.x, y: p.y };
         }
       }
+      game.onTrip('laser');
     }
   }
 }

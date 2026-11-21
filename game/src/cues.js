@@ -94,7 +94,14 @@ export function fireCue(game, n) {
     game.audio.cueFollowspot();
   }
   game.spawnBurst(game.player.x, game.player.y, 14);
+  // Every cue feeds the campaign heat as well as House Suspicion. At 100
+  // heat the run ends, so cues are a budget, not a free button.
+  game.heat = Math.min(100, game.heat + 5);
   if (game.emitHud) game.emitHud();
+  if (game.heat >= 100) {
+    game.endRun('Heat maxed. The house is boiling.');
+    return true;
+  }
   if (cues.suspicion >= 100) game.onCurtainDrop();
   return true;
 }
