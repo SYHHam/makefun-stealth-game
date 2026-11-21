@@ -1,127 +1,133 @@
-// The Cue Board: four stage cues fired from a prompt desk or a stolen remote.
-// Every cue costs one Cue token and raises House Suspicion. At 100 percent
-// suspicion the curtain drops and the heist fails. The Show Clock advances
-// scenes on its own, changing the lighting tint and the patrol tempo.
+// PROMPT SIDE: the Cue Board. One file, one job: the four stage cues
+// the player fires with keys 1-4. A cue rewires light, sound and guard
+// behavior for a few seconds, and every cue costs one Cue token and
+// raises House Suspicion. The effects live on game.cueFx so guards.js
+// and render.js can read them; this file only starts and counts them down.
 
 export const CUES = [
   {
+    id: 'blackout',
     key: '1',
     name: 'BLACKOUT',
-    desc: 'Vision cones collapse to lantern pinholes. Guards freeze for 6s.',
-    duration: 6,
+    blurb: 'cones collapse, guards freeze',
+    dur: 6,
   },
   {
+    id: 'thunder',
     key: '2',
     name: 'THUNDER SHEET',
-    desc: 'Applause and thunder mask all your noise for 5s. Sprint freely.',
-    duration: 5,
+    blurb: 'applause masks all noise',
+    dur: 5,
   },
   {
+    id: 'fog',
     key: '3',
     name: 'FOG DRUM',
-    desc: 'Fog shortens cones 40 percent for 10s, but you show up in any beam.',
-    duration: 10,
+    blurb: 'cones shorten, silhouette shows',
+    dur: 8,
   },
   {
+    id: 'followspot',
     key: '4',
     name: 'FOLLOWSPOT',
-    desc: 'Pins the nearest guard, who stares into the lamp, blinded, for 8s.',
-    duration: 8,
+    blurb: 'pins one guard, blinded',
+    dur: 8,
   },
 ];
 
-export const SUSPICION_PER_CUE = 15;
+export function cueByKey(key) {
+  return CUES.find((c) => c.key === key) || null;
+}
 
-export function makeCueBoard(tokens) {
+export function createCueFx() {
   return {
-    tokens,
-    suspicion: 0,
     blackout: 0,
     thunder: 0,
     fog: 0,
     followspot: 0,
-    followspotTarget: null,
-    scene: 0,
-    sceneTimer: 0,
-    sceneDuration: 45,
+    followspotGuard: null,
   };
 }
 
-// Fire cue number 1..4. Returns true when it fired, false when it could not.
-export function fireCue(game, n) {
-  const cues = game.cues;
+// Fire one cue. Returns true when it went off, false when it could not
+// (no tokens, or the game is not in play). The cost is paid here:
+// one token, 5 heat, 15 house suspicion.
+export function fireCue(game, id) {
   if (game.state !== 'playing') return false;
-  if (n < 1 || n > 4) return false;
-  if (cues.tokens <= 0) {
-    game.setMessage('No Cue tokens left. Find a cue desk.');
+  if (game.cueTokens <= 0) {
+    game.setMessage('No Cue tokens left.');
     return false;
   }
-  const def = CUES[n - 1];
-  cues.tokens -= 1;
-  cues.suspicion = Math.min(100, cues.suspicion + SUSPICION_PER_CUE);
-  if (n === 1) {
-    cues.blackout = def.duration;
-    for (const g of game.guards) {
-      if (g.state === 'PATROL') g.pauseTimer = Math.max(g.pauseTimer, def.duration);
-    }
+  const cue = CUES.find((c) => c.id === id);
+  if (!cue) return false;
+  game.cueTokens -= 1;
+  game.addHeat(5);
+  game.addSuspicion(15);
+  if (id === 'blackout') {
+    game.cueFx.blackout = cue.dur;
     game.setMessage('BLACKOUT. The house holds its breath.');
-    game.audio.cueBlackout();
-  } else if (n === 2) {
-    cues.thunder = def.duration;
-    game.setMessage('THUNDER SHEET. Applause swallows every sound.');
-    game.audio.cueThunder();
-  } else if (n === 3) {
-    cues.fog = def.duration;
-    game.setMessage('FOG DRUM. The boards disappear into fog.');
-    game.audio.cueFog();
-  } else {
-    cues.followspot = def.duration;
-    let nearest = null;
-    let best = Infinity;
-    for (const g of game.guards) {
-      const d = Math.hypot(g.x - game.player.x, g.y - game.player.y);
-      if (d < best) { best = d; nearest = g; }
-    }
-    if (nearest) {
-      nearest.stunned = def.duration;
-      nearest.state = 'PATROL';
-      nearest.detect = 0;
-      cues.followspotTarget = nearest;
-      game.setMessage('FOLLOWSPOT. A stagehand stares into the lamp, blinded.');
-    } else {
-      game.setMessage('FOLLOWSPOT. No guard near enough to pin.');
-    }
-    game.audio.cueFollowspot();
+  } else if (id === 'thunder') {
+    game.cueFx.thunder = cue.dur;
+    game.setMessage('THUNDER SHEET. Applause covers your steps.');
+  } else if (id === 'fog') {
+    game.cueFx.fog = cue.dur;
+    game.setMessage('FOG DRUM. The cones shrink, but you stand out in any beam.');
+  } else if (id === 'followspot') {
+    game.cueFx.followspot = cue.dur;
+    game.cueFx.followspotGuard = nearestGuard(game);
+    game.setMessage('FOLLOWSPOT. One guard stares into the lamp.');
   }
-  game.spawnBurst(game.player.x, game.player.y, 14);
-  // Every cue feeds the campaign heat as well as House Suspicion. At 100
-  // heat the run ends, so cues are a budget, not a free button.
-  game.heat = Math.min(100, game.heat + 5);
-  if (game.emitHud) game.emitHud();
-  if (game.heat >= 100) {
-    game.endRun('Heat maxed. The house is boiling.');
-    return true;
-  }
-  if (cues.suspicion >= 100) game.onCurtainDrop();
+  game.sound.cue();
   return true;
 }
 
-export function updateCues(game, dt) {
-  const cues = game.cues;
-  cues.blackout = Math.max(0, cues.blackout - dt);
-  cues.thunder = Math.max(0, cues.thunder - dt);
-  cues.fog = Math.max(0, cues.fog - dt);
-  cues.followspot = Math.max(0, cues.followspot - dt);
-  if (cues.followspot <= 0) cues.followspotTarget = null;
-
-  // The Show Clock: scenes advance on their own, tint shifts, patrols quicken.
-  cues.sceneTimer += dt;
-  if (cues.sceneTimer >= cues.sceneDuration) {
-    cues.sceneTimer = 0;
-    cues.scene = (cues.scene + 1) % 3;
-    const names = ['Scene shifts. The gel wash changes.', 'A new scene begins. Patrols quicken.', 'The act turns. The house leans in.'];
-    game.setMessage(names[cues.scene]);
-    game.audio.sceneShift();
-    if (game.emitHud) game.emitHud();
+// The guard nearest the player, for FOLLOWSPOT to pin.
+function nearestGuard(game) {
+  let best = null;
+  let bestD = Infinity;
+  for (const g of game.guards) {
+    const dx = g.x - game.player.x;
+    const dy = g.y - game.player.y;
+    const d = dx * dx + dy * dy;
+    if (d < bestD) {
+      bestD = d;
+      best = g;
+    }
   }
+  return best;
+}
+
+// Count the active effects down. Called once per frame from main.js.
+export function updateCues(game, dt) {
+  const fx = game.cueFx;
+  if (fx.blackout > 0) fx.blackout = Math.max(0, fx.blackout - dt);
+  if (fx.thunder > 0) fx.thunder = Math.max(0, fx.thunder - dt);
+  if (fx.fog > 0) fx.fog = Math.max(0, fx.fog - dt);
+  if (fx.followspot > 0) {
+    fx.followspot = Math.max(0, fx.followspot - dt);
+    if (fx.followspot === 0) fx.followspotGuard = null;
+  }
+}
+
+// Applause mask, 0 to 1. While THUNDER SHEET runs, all noise is masked.
+export function applauseMask(game) {
+  return game.cueFx.thunder > 0 ? 1 : 0;
+}
+
+// Cone length multiplier from the active cues.
+export function coneRangeFactor(game) {
+  let f = 1;
+  if (game.cueFx.blackout > 0) f *= 0.25;
+  if (game.cueFx.fog > 0) f *= 0.6;
+  return f;
+}
+
+// True while the guards are frozen by BLACKOUT.
+export function guardsFrozen(game) {
+  return game.cueFx.blackout > 0;
+}
+
+// True when this guard is pinned by FOLLOWSPOT and cannot see.
+export function guardBlinded(game, guard) {
+  return game.cueFx.followspot > 0 && game.cueFx.followspotGuard === guard;
 }

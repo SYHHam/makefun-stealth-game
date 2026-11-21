@@ -1,325 +1,298 @@
-// Level definitions for PROMPT SIDE: five acts in a grand 1890s opera house.
-// Each map is a grid of characters. Legend:
-//   # wall (blocks movement and sight)
-//   . floorboards
-//   , deep shadow floor (dark, hard to be seen here)
-//   T tall cover, crate or painted flat (blocks movement and sight)
-//   l low cover, costume rack or bush (hides a crouched player, does not block sight)
-//   L hanging lamp (light source)
-//   P player start
-//   O objective item
-//   X exit
-//   V vent (press E to crawl to its pair)
-//   D cue desk (press E to refill one Cue token)
-// Guards walk in straight lines between consecutive waypoints, so every
-// segment of a patrol route must be clear of walls and tall cover.
-// Cameras, lasers and lamps are defined per level below the maps.
+// PROMPT SIDE: level data for the five acts.
+// One file, one job: it only describes the opera house. No drawing, no
+// input, no sound. Every act is a 24 by 16 tile stage. Tiles:
+//   '#' wall (blocks movement and sight)
+//   'C' tall crate (blocks movement and sight, good cover)
+//   'c' low cover (blocks movement; hides a sneaking player)
+//   'L' lamp (bright light, raises visibility)
+//   'D' deep shadow (dark, hard to be seen)
+//   '.' floor
+// Guards, cameras, lasers, vents, the objective and the exit are placed
+// in tile coordinates and converted to pixels by the game.
 
 export const TILE = 32;
+export const COLS = 24;
+export const ROWS = 16;
 
-// The five-act campaign, shown in the CAMPAIGN panel on every screen and on
-// the title screen itinerary. Short names are the level name with the act
-// number stripped, so the panel and the title list always agree.
-export const ACT_COUNT = 5;
-export const ACT_ITINERARY = [
-  { n: 1, name: 'HALF-HOUR CALL' },
-  { n: 2, name: 'THE GARDEN SCENE' },
-  { n: 3, name: 'INTERMISSION' },
-  { n: 4, name: 'THE STORM' },
-  { n: 5, name: 'CURTAIN CALL' },
+export const LEVELS = [
+  {
+    name: 'HALF-HOUR CALL',
+    scene: 'Backstage, half an hour to curtain',
+    goal: 'Steal one score page, then reach the stage door exit.',
+    actGoal: 'Steal one score page, then reach the stage door exit.',
+    gel: 'amber',
+    fog: false,
+    coins: 2,
+    cueTokens: 4,
+    grid: [
+      '########################',
+      '#......................#',
+      '#..C.....L......C......#',
+      '#......................#',
+      '#....c.......c.........#',
+      '#..####................#',
+      '#..................L...#',
+      '#....c.......c.........#',
+      '#......................#',
+      '#..C.....L......C......#',
+      '#......................#',
+      '#....c.......c......L..#',
+      '#......................#',
+      '#..####................#',
+      '#......................#',
+      '########################',
+    ],
+    spawn: { x: 2, y: 13 },
+    objective: { x: 20, y: 2, label: 'score page' },
+    exit: { x: 21, y: 13, label: 'stage door' },
+    guards: [
+      { name: 'Stagehand', x: 6, y: 3, waypoints: [[6, 3], [6, 10], [12, 10], [12, 3]], speed: 1.1, cone: 5, color: 'amber' },
+      { name: 'Dresser', x: 17, y: 8, waypoints: [[17, 8], [17, 3], [20, 3], [20, 12]], speed: 0.9, cone: 5, color: 'cyan' },
+    ],
+    cameras: [],
+    lasers: [],
+    vents: [{ a: { x: 3, y: 7 }, b: { x: 20, y: 7 } }],
+  },
+  {
+    name: 'THE GARDEN SCENE',
+    scene: 'A green gel wash over painted garden flats',
+    goal: 'Steal Prompt Book page 1, then reach the stage door exit.',
+    actGoal: 'Steal Prompt Book page 1, then reach the stage door exit.',
+    gel: 'green',
+    fog: false,
+    coins: 3,
+    cueTokens: 4,
+    grid: [
+      '########################',
+      '#......................#',
+      '#..c.....L......c......#',
+      '#......................#',
+      '#....C.......C.........#',
+      '#......####............#',
+      '#..c...............L...#',
+      '#....C.......C.........#',
+      '#......................#',
+      '#..L.....c......C......#',
+      '#......................#',
+      '#....c.......c......L..#',
+      '#......................#',
+      '#......####............#',
+      '#..c...................#',
+      '########################',
+    ],
+    spawn: { x: 2, y: 13 },
+    objective: { x: 20, y: 2, label: 'Prompt Book page 1' },
+    exit: { x: 21, y: 13, label: 'stage door' },
+    guards: [
+      { name: 'Stagehand', x: 6, y: 3, waypoints: [[6, 3], [6, 11], [11, 11], [11, 3]], speed: 1.2, cone: 5, color: 'amber' },
+      { name: 'Dresser', x: 14, y: 6, waypoints: [[14, 6], [14, 12], [19, 12], [19, 6]], speed: 1.0, cone: 5, color: 'magenta' },
+      { name: 'Stage Manager', x: 18, y: 10, waypoints: [[18, 10], [10, 10], [10, 5], [18, 5]], speed: 1.1, cone: 6, color: 'cyan' },
+    ],
+    cameras: [
+      { x: 12, y: 1, dir: 90, sweep: 60, range: 6, color: 'amber' },
+    ],
+    lasers: [],
+    vents: [{ a: { x: 3, y: 7 }, b: { x: 20, y: 7 } }],
+  },
+  {
+    name: 'INTERMISSION',
+    scene: 'The lit foyer, the bar, the chandelier, the crowd',
+    goal: 'Steal Prompt Book page 2, then reach the loading dock exit.',
+    actGoal: 'Steal Prompt Book page 2, then reach the loading dock exit.',
+    gel: 'warm',
+    fog: false,
+    coins: 3,
+    cueTokens: 3,
+    grid: [
+      '########################',
+      '#......................#',
+      '#..C.....L......C......#',
+      '#......................#',
+      '#....c.......c.....L...#',
+      '#..####................#',
+      '#......................#',
+      '#....D.......D.........#',
+      '#......................#',
+      '#..C.....L......C......#',
+      '#......................#',
+      '#....c.......c......L..#',
+      '#......................#',
+      '#..####................#',
+      '#....D.......D.........#',
+      '########################',
+    ],
+    spawn: { x: 2, y: 13 },
+    objective: { x: 20, y: 2, label: 'Prompt Book page 2' },
+    exit: { x: 21, y: 13, label: 'loading dock' },
+    guards: [
+      { name: 'Usher', x: 5, y: 4, waypoints: [[5, 4], [5, 11], [10, 11], [10, 4]], speed: 1.1, cone: 5, color: 'magenta' },
+      { name: 'Stagehand', x: 13, y: 3, waypoints: [[13, 3], [13, 10], [18, 10], [18, 3]], speed: 1.0, cone: 5, color: 'amber' },
+      { name: 'Dresser', x: 19, y: 9, waypoints: [[19, 9], [12, 9], [12, 13], [19, 13]], speed: 1.2, cone: 5, color: 'cyan' },
+    ],
+    cameras: [
+      { x: 8, y: 1, dir: 90, sweep: 70, range: 6, color: 'amber' },
+      { x: 16, y: 14, dir: 270, sweep: 70, range: 6, color: 'amber' },
+    ],
+    lasers: [],
+    vents: [{ a: { x: 3, y: 7 }, b: { x: 20, y: 7 } }],
+  },
+  {
+    name: 'THE STORM',
+    scene: 'Strobe lightning, rain on the roof, fog in the wings',
+    goal: 'Steal the storm cue sheet, then reach the trapdoor exit.',
+    actGoal: 'Steal the storm cue sheet, then reach the trapdoor exit.',
+    gel: 'storm',
+    fog: true,
+    coins: 4,
+    cueTokens: 3,
+    grid: [
+      '########################',
+      '#......................#',
+      '#..C.....L......C......#',
+      '#......................#',
+      '#....D.......D.........#',
+      '#..####................#',
+      '#..................L...#',
+      '#....c.......c.........#',
+      '#......................#',
+      '#..C.....L......C......#',
+      '#......................#',
+      '#....D.......D......L..#',
+      '#......................#',
+      '#..####................#',
+      '#....c.......c.........#',
+      '########################',
+    ],
+    spawn: { x: 2, y: 13 },
+    objective: { x: 20, y: 2, label: 'storm cue sheet' },
+    exit: { x: 21, y: 13, label: 'trapdoor' },
+    guards: [
+      { name: 'Stagehand', x: 5, y: 3, waypoints: [[5, 3], [5, 11], [9, 11], [9, 3]], speed: 1.2, cone: 5, color: 'cyan' },
+      { name: 'Dresser', x: 12, y: 5, waypoints: [[12, 5], [12, 12], [16, 12], [16, 5]], speed: 1.1, cone: 5, color: 'magenta' },
+      { name: 'Stage Manager', x: 18, y: 4, waypoints: [[18, 4], [18, 11], [21, 11], [21, 4]], speed: 1.0, cone: 6, color: 'amber' },
+      { name: 'Usher', x: 10, y: 8, waypoints: [[10, 8], [15, 8], [15, 13], [10, 13]], speed: 1.3, cone: 5, color: 'cyan' },
+    ],
+    cameras: [
+      { x: 12, y: 1, dir: 90, sweep: 60, range: 6, color: 'amber' },
+    ],
+    lasers: [
+      { x1: 7, y1: 6, x2: 16, y2: 6, period: 3 },
+      { x1: 4, y1: 10, x2: 13, y2: 10, period: 4 },
+    ],
+    vents: [
+      { a: { x: 3, y: 7 }, b: { x: 20, y: 7 } },
+      { a: { x: 6, y: 12 }, b: { x: 18, y: 3 } },
+    ],
+  },
+  {
+    name: 'CURTAIN CALL',
+    scene: 'The fly tower catwalks, high above the stage',
+    goal: 'Steal the full Score, then escape through the loading dock.',
+    actGoal: 'Steal the full Score, then escape through the loading dock.',
+    gel: 'gold',
+    fog: false,
+    coins: 5,
+    cueTokens: 5,
+    grid: [
+      '########################',
+      '#......................#',
+      '#..C.....L......C......#',
+      '#......................#',
+      '#....c.......c.........#',
+      '#......####............#',
+      '#..................L...#',
+      '#....D.......D.........#',
+      '#......................#',
+      '#..C.....L......C......#',
+      '#......................#',
+      '#....c.......c......L..#',
+      '#......................#',
+      '#......####............#',
+      '#....D.......D.........#',
+      '########################',
+    ],
+    spawn: { x: 2, y: 13 },
+    objective: { x: 20, y: 2, label: 'the full Score' },
+    exit: { x: 21, y: 13, label: 'loading dock' },
+    guards: [
+      { name: 'Stagehand', x: 5, y: 3, waypoints: [[5, 3], [5, 11], [9, 11], [9, 3]], speed: 1.2, cone: 5, color: 'amber' },
+      { name: 'Dresser', x: 12, y: 4, waypoints: [[12, 4], [12, 12], [16, 12], [16, 4]], speed: 1.1, cone: 5, color: 'magenta' },
+      { name: 'Stage Manager', x: 18, y: 3, waypoints: [[18, 3], [18, 10], [21, 10], [21, 3]], speed: 1.0, cone: 6, color: 'cyan' },
+      { name: 'Usher', x: 8, y: 8, waypoints: [[8, 8], [16, 8], [16, 13], [8, 13]], speed: 1.3, cone: 5, color: 'magenta' },
+    ],
+    cameras: [
+      { x: 9, y: 1, dir: 90, sweep: 70, range: 6, color: 'amber' },
+      { x: 15, y: 14, dir: 270, sweep: 70, range: 6, color: 'amber' },
+    ],
+    lasers: [
+      { x1: 6, y1: 6, x2: 17, y2: 6, period: 3 },
+      { x1: 5, y1: 11, x2: 15, y2: 11, period: 4 },
+    ],
+    vents: [
+      { a: { x: 3, y: 7 }, b: { x: 20, y: 7 } },
+      { a: { x: 6, y: 12 }, b: { x: 18, y: 3 } },
+    ],
+  },
 ];
 
-// The gadget kit, shown as icons on the title screen. The labels map to the
-// cue board: COIN is the thrown coin decoy, SMOKE is the FOG DRUM cue, and
-// LANTERN is the FOLLOWSPOT cue. Icons only, no balance change.
+export const ACT_COUNT = LEVELS.length;
+
+export const ACT_ITINERARY = LEVELS.map((l, i) => ({
+  n: i + 1,
+  name: l.name,
+  scene: l.scene,
+}));
+
 export const GADGETS = [
   { id: 'coin', label: 'COIN' },
   { id: 'smoke', label: 'SMOKE' },
   { id: 'lantern', label: 'LANTERN' },
 ];
 
-export const LEVELS = [
-  {
-    name: 'Act 1: Half-Hour Call',
-    scene: 'Backstage, half an hour to curtain',
-    objective: 'Steal one score page, then reach the stage door exit.',
-    tint: '#8a6d3b',
-    gel: 'amber',
-    sceneDuration: 50,
-    cueTokens: 3,
-    coins: 5,
-    map: [
-      '########################',
-      '#P....#......#.........#',
-      '#.....#..l...#....O....#',
-      '#..T..#......#.........#',
-      '#.....#..T...#....T....#',
-      '#..l......#.....#......#',
-      '#....#....#.......#....#',
-      '#....#....#..T...#.....#',
-      '#....#..T....#...#.....#',
-      '#.T..#......#..........#',
-      '#....#..l...#....T.....#',
-      '#....#......#..........#',
-      '#..T....#...#....#...X.#',
-      '#....#..#...#....#.....#',
-      '#..D.#......#....#.....#',
-      '########################',
-    ],
-    guards: [
-      { waypoints: [[4, 2], [4, 12]], speed: 55 },
-      { waypoints: [[20, 3], [20, 12]], speed: 50 },
-    ],
-    cameras: [],
-    lasers: [],
-    vents: [],
-    desks: [[3, 14]],
-    lamps: [[2, 7], [10, 8], [19, 7]],
-  },
-  {
-    name: 'Act 2: The Garden Scene',
-    scene: 'A green gel wash over painted garden flats',
-    objective: 'Steal Prompt Book page 1, then reach the stage door exit.',
-    tint: '#3f7a4e',
-    gel: 'cyan',
-    sceneDuration: 45,
-    cueTokens: 3,
-    coins: 5,
-    map: [
-      '########################',
-      '#P...l....#......#.....#',
-      '#........#..T...#..O.V.#',
-      '#..T.....#......#......#',
-      '#....l...#..l...#..T...#',
-      '#........#......#......#',
-      '#..#.....#..T...#......#',
-      '#..#..T.......,....#...#',
-      '#..#.....#..T...#..#...#',
-      '#..#..l..#......#..#...#',
-      '#..#.....#..T...#..#...#',
-      '#..#.....#......#..#...#',
-      '#..#..T..#..l...#..#...#',
-      '#.V#.....#......#......#',
-      '#..D..l.....T......X...#',
-      '########################',
-    ],
-    guards: [
-      { waypoints: [[5, 1], [5, 4]], speed: 60 },
-      { waypoints: [[17, 2], [17, 10]], speed: 60 },
-      { waypoints: [[17, 13], [21, 13]], speed: 55 },
-    ],
-    cameras: [],
-    lasers: [],
-    vents: [[2, 13, 21, 2]],
-    desks: [[3, 14]],
-    lamps: [[5, 3], [15, 6], [20, 10]],
-    followspot: { cx: 12, cy: 7, radius: 90, speed: 0.35 },
-  },
-  {
-    name: 'Act 3: Intermission',
-    scene: 'The lit foyer, the bar, the chandelier, the crowd',
-    objective: 'Steal Prompt Book page 2, then reach the loading dock exit.',
-    tint: '#c9a227',
-    gel: 'magenta',
-    sceneDuration: 45,
-    cueTokens: 4,
-    coins: 5,
-    map: [
-      '########################',
-      '#P....#.......#.....V..#',
-      '#.....#...l...#...O....#',
-      '#..T..#.......#........#',
-      '#.....#..T....#...T....#',
-      '#..l.....#........#....#',
-      '#....#...#...T....#....#',
-      '#....#.V.#....V...#....#',
-      '#....#...#...l....#....#',
-      '#.T..#...#........#....#',
-      '#....#...#...T....#....#',
-      '#....#...#........#....#',
-      '#....#...#...l....#....#',
-      '#..T.....#........#..X.#',
-      '#.VD..l..#...T....#....#',
-      '########################',
-    ],
-    guards: [
-      { waypoints: [[2, 2], [4, 2], [4, 4], [2, 4]], speed: 65 },
-      { waypoints: [[11, 2], [11, 5]], speed: 65 },
-      { waypoints: [[20, 3], [20, 11]], speed: 60 },
-    ],
-    cameras: [
-      { tx: 12, ty: 1, baseAngle: Math.PI / 2, sweep: 1.1, speed: 0.5, range: 190 },
-      { tx: 12, ty: 14, baseAngle: -Math.PI / 2, sweep: 1.1, speed: 0.4, range: 190 },
-    ],
-    lasers: [],
-    vents: [[2, 14, 20, 1]],
-    desks: [[3, 14]],
-    lamps: [[3, 7], [11, 9], [19, 6], [16, 12]],
-    crowd: [[10, 5], [10, 7], [11, 6], [17, 6], [17, 8], [19, 7]],
-  },
-  {
-    name: 'Act 4: The Storm',
-    scene: 'Strobe lightning, rain on the roof, fog on the boards',
-    objective: 'Steal Prompt Book page 3, then reach the stage door exit.',
-    tint: '#5a6f8a',
-    gel: 'cyan',
-    sceneDuration: 40,
-    cueTokens: 4,
-    coins: 5,
-    map: [
-      '########################',
-      '#P....#.......#.....V..#',
-      '#.....#...l...#...O....#',
-      '#..T..#.......#........#',
-      '#.....#..T....#...T....#',
-      '#..l.....#........#....#',
-      '#....#...#...T....#....#',
-      '#....#.V.#....V...#....#',
-      '#....#...#...l....#....#',
-      '#.T..#...#........#....#',
-      '#....#...#...T....#....#',
-      '#....#...#........#....#',
-      '#....#...#...l....#....#',
-      '#..T.....#........#..X.#',
-      '#.VD..l..#...T....#....#',
-      '########################',
-    ],
-    guards: [
-      { waypoints: [[2, 2], [4, 2], [4, 4], [2, 4]], speed: 70 },
-      { waypoints: [[11, 2], [11, 5]], speed: 70 },
-      { waypoints: [[16, 2], [16, 5]], speed: 70 },
-      { waypoints: [[20, 3], [20, 11]], speed: 65 },
-    ],
-    cameras: [
-      { tx: 12, ty: 7, baseAngle: 0, sweep: 1.4, speed: 0.6, range: 180 },
-    ],
-    lasers: [
-      { x1: 10, y1: 6, x2: 10, y2: 12, period: 3.2, phase: 0 },
-      { x1: 17, y1: 3, x2: 17, y2: 12, period: 4.0, phase: 1.5 },
-    ],
-    vents: [[2, 14, 20, 1], [7, 7, 14, 7]],
-    desks: [[3, 14]],
-    lamps: [[3, 7], [11, 9], [19, 6], [16, 12]],
-    storm: true,
-  },
-  {
-    name: 'Act 5: Curtain Call',
-    scene: 'The fly tower catwalks, high above the stage',
-    objective: 'Steal the full Score, then escape through the loading dock.',
-    tint: '#a03a3a',
-    gel: 'amber',
-    sceneDuration: 40,
-    cueTokens: 5,
-    coins: 6,
-    map: [
-      '########################',
-      '#P....#.......#.....V..#',
-      '#.....#...l...#...O....#',
-      '#..T..#.......#........#',
-      '#.....#..T....#...T....#',
-      '#..l.....#........#....#',
-      '#....#...#...T....#....#',
-      '#....#.V.#....V...#....#',
-      '#....#...#...l....#....#',
-      '#.T..#...#........#....#',
-      '#....#...#...T....#....#',
-      '#....#...#........#....#',
-      '#....#...#...l....#....#',
-      '#..T.....#........#..X.#',
-      '#.VD..l..#...T....#....#',
-      '########################',
-    ],
-    guards: [
-      { waypoints: [[2, 2], [4, 2], [4, 4], [2, 4]], speed: 75 },
-      { waypoints: [[11, 2], [11, 5]], speed: 75 },
-      { waypoints: [[16, 2], [16, 5]], speed: 75 },
-      { waypoints: [[20, 3], [20, 11]], speed: 75 },
-      { waypoints: [[11, 8], [11, 12]], speed: 70 },
-    ],
-    cameras: [
-      { tx: 12, ty: 1, baseAngle: Math.PI / 2, sweep: 1.2, speed: 0.55, range: 200 },
-      { tx: 12, ty: 14, baseAngle: -Math.PI / 2, sweep: 1.2, speed: 0.55, range: 200 },
-    ],
-    lasers: [
-      { x1: 10, y1: 6, x2: 10, y2: 12, period: 2.8, phase: 0 },
-      { x1: 17, y1: 3, x2: 17, y2: 12, period: 3.4, phase: 1.2 },
-      { x1: 10, y1: 7, x2: 13, y2: 7, period: 3.0, phase: 0.8 },
-    ],
-    vents: [[2, 14, 20, 1]],
-    desks: [[3, 14]],
-    lamps: [[3, 7], [11, 9], [19, 6], [16, 12]],
-  },
-];
-
-// Grid helpers shared by every system.
-
-export function tileAt(grid, tx, ty) {
-  if (ty < 0 || ty >= grid.length || tx < 0 || tx >= grid[0].length) return '#';
-  return grid[ty][tx];
+// Tile helpers. Coordinates are tile indices; out of bounds counts as wall.
+export function tileAt(level, tx, ty) {
+  if (tx < 0 || ty < 0 || tx >= COLS || ty >= ROWS) return '#';
+  return level.grid[ty][tx];
 }
 
-export function isSolidChar(ch) {
-  return ch === '#' || ch === 'T';
+export function isWall(level, tx, ty) {
+  return tileAt(level, tx, ty) === '#';
 }
 
-export function blocksSightChar(ch) {
-  return ch === '#' || ch === 'T';
+export function blocksMove(level, tx, ty) {
+  const t = tileAt(level, tx, ty);
+  return t === '#' || t === 'C' || t === 'c';
 }
 
-export function isWalkableChar(ch) {
-  return !isSolidChar(ch);
+export function blocksSight(level, tx, ty) {
+  const t = tileAt(level, tx, ty);
+  return t === '#' || t === 'C';
 }
 
-// Find the first tile holding a character, in tile coordinates.
-export function findTile(grid, ch) {
-  for (let y = 0; y < grid.length; y++) {
-    for (let x = 0; x < grid[y].length; x++) {
-      if (grid[y][x] === ch) return { tx: x, ty: y };
-    }
-  }
-  return null;
+export function isLamp(level, tx, ty) {
+  return tileAt(level, tx, ty) === 'L';
 }
 
-export function findAllTiles(grid, ch) {
+export function isShadow(level, tx, ty) {
+  return tileAt(level, tx, ty) === 'D';
+}
+
+export function isCover(level, tx, ty) {
+  return tileAt(level, tx, ty) === 'c';
+}
+
+// Pixel center of a tile.
+export function tileCenter(tx, ty) {
+  return { x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 };
+}
+
+// All lamp tile centers, for the lighting pass.
+export function lampTiles(level) {
   const out = [];
-  for (let y = 0; y < grid.length; y++) {
-    for (let x = 0; x < grid[y].length; x++) {
-      if (grid[y][x] === ch) out.push({ tx: x, ty: y });
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if (level.grid[y][x] === 'L') out.push({ x, y });
     }
   }
   return out;
-}
-
-// Line of sight between two pixel points, blocked by walls and tall cover.
-// Samples along the segment, so a diagonal through a wall corner still counts.
-export function hasLineOfSight(grid, x1, y1, x2, y2) {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const dist = Math.hypot(dx, dy);
-  const steps = Math.max(1, Math.ceil(dist / 8));
-  for (let i = 1; i < steps; i++) {
-    const t = i / steps;
-    const tx = Math.floor((x1 + dx * t) / TILE);
-    const ty = Math.floor((y1 + dy * t) / TILE);
-    if (blocksSightChar(tileAt(grid, tx, ty))) return false;
-  }
-  return true;
-}
-
-// Is a pixel point inside a solid tile.
-export function solidAtPixel(grid, x, y) {
-  return isSolidChar(tileAt(grid, Math.floor(x / TILE), Math.floor(y / TILE)));
-}
-
-// Light level at a pixel point: 0 is pitch dark, 1 is full lamp light.
-// Deep shadow tiles are darkest, lamps add a warm pool around them.
-export function lightAt(grid, lamps, x, y) {
-  const tx = Math.floor(x / TILE);
-  const ty = Math.floor(y / TILE);
-  let light = tileAt(grid, tx, ty) === ',' ? 0.12 : 0.3;
-  for (const lamp of lamps) {
-    const d = Math.hypot(x - lamp.x, y - lamp.y);
-    if (d < 110) light = Math.max(light, 0.95 - (d / 110) * 0.55);
-  }
-  return Math.min(1, light);
 }

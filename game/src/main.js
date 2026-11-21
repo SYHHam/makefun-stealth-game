@@ -1,257 +1,247 @@
-// PROMPT SIDE: main loop, screen stack, level loading.
-// Screens are a stack: title, playing, paused, intermission, strikeLost,
-// gameOver, victory. Only the top screen takes input, and the screen below
-// gets its focus back when the top one closes. The simulation runs on a fixed
-// timestep (1/60s) decoupled from rendering, so the game plays at the same
-// speed on any display. The canvas buffer is scaled by devicePixelRatio
-// (capped at 2) while CSS dimensions stay fixed, so the game is not blurry.
+// PROMPT SIDE: the game itself. One file, one job: it owns the game
+// object, the loop, the screens and the campaign. It wires the other
+// modules together (levels, guards, player, cues, audio, input, render)
+// and never draws a pixel or moves a guard on its own.
+// The campaign (acts, pages, score, strikes, heat) persists across acts.
+// A strike costs one of three strikes and adds heat; the act restarts
+// with the campaign kept. Three strikes, heat 100 or suspicion 100
+// ends the run.
 
-import { LEVELS, TILE } from './levels.js';
-import { makeGuard, makeCamera, updateGuard, updateCamera, updateLasers, updatePlayerLight } from './guards.js';
-import { makePlayer, updatePlayer, throwCoin, levelEntities } from './player.js';
-import { makeCueBoard, fireCue, updateCues } from './cues.js';
-import { drawGame, detectionLabel, uiScale, uiPanelWidth, uiTopHeight } from './render.js';
-import { ACT_COUNT } from './levels.js';
-import { makeAudio } from './audio.js';
-import { makeInput } from './input.js';
+import { LEVELS, ACT_COUNT, TILE, lampTiles, tileCenter } from './levels.js';
+import { createGuards, createCameras, createLasers, updateGuards, updateCameras, updateLasers, playerLux, worstSuspicion } from './guards.js';
+import { createPlayer, updatePlayer } from './player.js';
+import { createCueFx, fireCue, updateCues, cueByKey } from './cues.js';
+import { createInput } from './input.js';
+import { sound } from './audio.js';
+import { draw, createView, CANVAS_W, CANVAS_H } from './render.js';
 
+const SCENE_LEN = 45;
 const STEP = 1 / 60;
 
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
 
-const game = {
-  screens: ['title'],
-  state: 'title',
-  canvasW: 0,
-  canvasH: 0,
-  dpr: 1,
-  view: { scale: 1, ox: 0, oy: 112 },
-  levelIndex: 0,
-  level: LEVELS[0],
-  grid: [],
-  player: null,
-  guards: [],
-  cameras: [],
-  lasers: [],
-  vents: [],
-  desks: [],
-  lamps: [],
-  objective: null,
-  exit: null,
-  crowd: null,
-  followspot: null,
-  followspotPos: null,
-  cues: makeCueBoard(3),
-  coinsThrown: [],
-  particles: [],
-  score: 0,
-  pages: 0,
-  spotted: 0,
-  spottedThisLevel: false,
-  ghostThisLevel: false,
-  time: 0,
-  levelTime: 0,
-  playerLight: 0.3,
-  message: '',
-  messageTimer: 0,
-  loseReason: '',
-  // Campaign state: persists across acts, resets only when a new run starts.
-  // strikes is the recoverable-mistake budget, heat is the campaign-wide
-  // suspicion that cues and mistakes feed and act completions cool down.
-  // completedActs marks finished acts, actPages counts this act's page,
-  // actTimes records each finished act's time, totalTime sums them.
-  strikes: 3,
-  heat: 0,
-  completedActs: [false, false, false, false, false],
-  actPages: 0,
-  actTimes: [0, 0, 0, 0, 0],
-  totalTime: 0,
-  lastCompletedAct: -1,
-  strikeReason: '',
-  audio: makeAudio(),
-  input: null,
-  // HUD snapshot: discrete HUD values are updated only when a game event
-  // changes them (score, suspicion, cue fired, objective collected, scene
-  // changed, detection changed). The renderer reads this snapshot instead
-  // of polling live game state for those values.
-  hud: {
-    score: 0,
+export function createGame() {
+  return {
+    levelIndex: 0,
+    level: LEVELS[0],
+    lamps: [],
+    guards: [],
+    cameras: [],
+    lasers: [],
+    player: null,
+    state: 'title',
+    screens: [],
+    view: null,
+    input: null,
+    sound,
+    cueFx: createCueFx(),
+    levelTime: 0,
+    time: 0,
+    sceneIndex: 0,
+    strobe: 0,
     suspicion: 0,
-    tokens: 3,
+    score: 0,
     pages: 0,
-    spotted: 0,
-    coins: 5,
-    detection: 'UNSEEN',
-    scene: 0,
-    sceneTotal: 3,
-    objective: '',
-    message: '',
-    hasObjective: false,
-    levelName: '',
-    levelScene: '',
+    actPages: 0,
     strikes: 3,
     heat: 0,
-    completedActs: [false, false, false, false, false],
-    actPages: 0,
+    spotted: 0,
+    actSpotted: 0,
+    completedActs: new Array(ACT_COUNT).fill(false),
+    actTimes: new Array(ACT_COUNT).fill(0),
     totalTime: 0,
-  },
-};
+    lastCompletedAct: -1,
+    strikeReason: '',
+    loseReason: '',
+    objectiveTaken: false,
+    coins: 0,
+    cueTokens: 0,
+    coinLure: null,
+    coinsThrown: [],
+    lux: 0.3,
+    status: 'UNSEEN',
+    message: '',
+    messageT: 0,
+    started: false,
+  };
+}
 
-// Screen stack helpers. Only the top screen takes input.
-game.setScreen = (name) => {
-  game.screens = [name];
-  game.state = name;
-};
-
-game.pushScreen = (name) => {
+function pushScreen(game, name) {
   game.screens.push(name);
   game.state = name;
-};
+}
 
-game.popScreen = () => {
-  if (game.screens.length > 1) game.screens.pop();
-  game.state = game.screens[game.screens.length - 1];
-};
+function popScreen(game) {
+  game.screens.pop();
+  game.state = game.screens[game.screens.length - 1] || 'title';
+}
 
-game.emitHud = () => {
-  const h = game.hud;
-  h.score = game.score;
-  h.suspicion = Math.floor(game.cues.suspicion);
-  h.tokens = game.cues.tokens;
-  h.pages = game.pages;
-  h.spotted = game.spotted;
-  h.coins = game.player ? game.player.coins : 0;
-  h.detection = game.guards.length ? detectionLabel(game) : 'UNSEEN';
-  h.scene = game.cues.scene;
-  h.sceneTotal = 3;
-  h.objective = game.level.objective;
-  h.message = game.message;
-  h.hasObjective = game.player ? game.player.hasObjective : false;
-  h.levelName = game.level.name;
-  h.levelScene = game.level.scene;
-  h.strikes = game.strikes;
-  h.heat = game.heat;
-  h.completedActs = game.completedActs.slice();
-  h.actPages = game.actPages;
-  h.totalTime = game.totalTime;
-};
+function setScreen(game, name) {
+  game.screens = [name];
+  game.state = name;
+}
 
-game.setMessage = (text) => {
-  game.message = text;
-  game.messageTimer = 4;
-  game.emitHud();
-};
+// Load one act. Campaign totals (strikes, heat, score, pages,
+// completedActs) survive; the act-local state resets.
+export function loadLevel(game, index) {
+  game.levelIndex = index;
+  game.level = LEVELS[index];
+  game.lamps = lampTiles(game.level);
+  game.guards = createGuards(game.level);
+  game.cameras = createCameras(game.level);
+  game.lasers = createLasers(game.level);
+  game.player = createPlayer(game.level.spawn);
+  game.levelTime = 0;
+  game.sceneIndex = 0;
+  game.strobe = 0;
+  game.suspicion = 0;
+  game.actPages = 0;
+  game.actSpotted = 0;
+  game.objectiveTaken = false;
+  game.coins = game.level.coins;
+  game.cueTokens = game.level.cueTokens;
+  game.cueFx = createCueFx();
+  game.coinLure = null;
+  game.coinsThrown = [];
+  game.status = 'UNSEEN';
+  game.lux = 0.3;
+  // The banner always names the act just loaded, so a showcase that
+  // jumps to a later act never shows a stale earlier act's banner.
+  game.setMessage('Act ' + (index + 1) + ': ' + game.level.name + '. ' + game.level.actGoal);
+}
 
-game.spawnBurst = (x, y, n) => {
-  for (let i = 0; i < n; i++) {
-    const a = Math.random() * Math.PI * 2;
-    const speed = 20 + Math.random() * 60;
-    game.particles.push({
-      x, y,
-      vx: Math.cos(a) * speed,
-      vy: Math.sin(a) * speed,
-      life: 0.6 + Math.random() * 0.4,
-      maxLife: 1,
-      size: 1.5 + Math.random() * 2,
-      color: '#f5d76e',
-    });
-  }
-};
+export function startGame(game) {
+  game.score = 0;
+  game.pages = 0;
+  game.actPages = 0;
+  game.strikes = 3;
+  game.heat = 0;
+  game.spotted = 0;
+  game.actSpotted = 0;
+  game.completedActs = new Array(ACT_COUNT).fill(false);
+  game.actTimes = new Array(ACT_COUNT).fill(0);
+  game.totalTime = 0;
+  game.lastCompletedAct = -1;
+  game.strikeReason = '';
+  game.loseReason = '';
+  game.started = true;
+  loadLevel(game, 0);
+  setScreen(game, 'playing');
+  game.setMessage('Act 1: Half-Hour Call. Steal the score page, then reach the exit.');
+}
 
-game.onSpotted = (kind) => {
-  if (!game.spottedThisLevel) game.spottedThisLevel = true;
-  game.spotted += 1;
-  if (kind === 'seen') {
-    game.cues.suspicion = Math.min(100, game.cues.suspicion + 3);
-    game.setMessage('A stagehand has marked you. Slip back into shadow.');
-  } else {
-    game.cues.suspicion = Math.min(100, game.cues.suspicion + 6);
-    game.setMessage('Spotted. Break line of sight and hide.');
-  }
-  game.emitHud();
-  if (game.cues.suspicion >= 100) game.onCurtainDrop();
-};
+// --- Campaign hooks, called by the other modules. ---
 
-// Score page pickup hook. player.js calls this instead of doing the score
-// math inline, so the campaign totals stay in one place.
-game.onPagePickup = () => {
-  game.pages += 1;
-  game.actPages += 1;
-  game.score += 250;
-  game.audio.pickup();
-  game.setMessage('Score page stolen. Now reach the exit, unseen.');
-  game.emitHud();
-};
+function addMethods(game) {
+  game.setMessage = (msg) => {
+    game.message = msg;
+    game.messageT = 4;
+  };
+  game.addHeat = (n) => {
+    game.heat = clamp(game.heat + n, 0, 100);
+    if (game.heat >= 100) endRun(game, 'HEAT MAXED. THE HOUSE IS BOILING.');
+  };
+  game.addSuspicion = (n) => {
+    game.suspicion = clamp(game.suspicion + n, 0, 100);
+    if (game.suspicion >= 100) endRun(game, 'HOUSE SUSPICION HIT 100%. THE CURTAIN DROPS.');
+  };
+  game.onPagePickup = () => {
+    game.pages += 1;
+    game.actPages += 1;
+    game.score += 250;
+    game.sound.pickup();
+    game.setMessage('Score page taken. Now reach the exit, unseen.');
+  };
+  game.onCaught = () => {
+    loseStrike(game, 'caught');
+  };
+  game.onTrip = (kind) => {
+    loseStrike(game, kind);
+  };
+  game.onLevelComplete = () => {
+    if (game.state !== 'playing') return;
+    const ghost = game.actSpotted === 0;
+    if (ghost) game.score += 500;
+    game.completedActs[game.levelIndex] = true;
+    game.actTimes[game.levelIndex] = game.levelTime;
+    game.totalTime += game.levelTime;
+    game.lastCompletedAct = game.levelIndex;
+    game.heat = Math.max(0, game.heat - 10);
+    game.sound.fanfare();
+    if (ghost) game.setMessage('GHOST +500. No one saw a thing.');
+    if (game.levelIndex === ACT_COUNT - 1) {
+      pushScreen(game, 'victory');
+    } else {
+      pushScreen(game, 'intermission');
+    }
+  };
+}
 
-// A recoverable mistake: being caught, tripping a camera, or crossing a
-// laser. Costs one strike and adds heat, then the act restarts with the
-// campaign (strikes, heat, score, pages, finished acts) kept. Losing the
-// last strike, or heat hitting 100, ends the run for good.
-game.loseStrike = (reason) => {
+function loseStrike(game, reason) {
   if (game.state !== 'playing') return;
   game.strikes -= 1;
   game.spotted += 1;
-  game.heat = Math.min(100, game.heat + (reason === 'caught' ? 15 : 10));
+  game.actSpotted += 1;
+  game.heat = clamp(game.heat + (reason === 'caught' ? 15 : 10), 0, 100);
   game.strikeReason = reason;
-  game.audio.lose();
+  game.sound.caught();
   if (game.strikes <= 0) {
-    game.endRun('Three strikes. The house wants you out.');
-    return;
+    endRun(game, 'THREE STRIKES. THE HOUSE WANTS YOU OUT.');
+  } else if (game.heat >= 100) {
+    endRun(game, 'HEAT MAXED. THE HOUSE IS BOILING.');
+  } else {
+    pushScreen(game, 'strikeLost');
   }
-  if (game.heat >= 100) {
-    game.endRun('Heat maxed. The house is boiling.');
-    return;
-  }
-  game.pushScreen('strikeLost');
-  game.emitHud();
-};
+}
 
-// Retry the current act after a strike, keeping the campaign state.
-game.retryActAfterStrike = () => {
-  game.popScreen();
-  loadLevel(game.levelIndex);
-  game.setScreen('playing');
-};
+function retryActAfterStrike(game) {
+  popScreen(game);
+  loadLevel(game, game.levelIndex);
+  game.state = 'playing';
+  game.setMessage('The act restarts. One strike spent.');
+}
 
-game.endRun = (reason) => {
+function retryAct(game) {
+  loadLevel(game, game.levelIndex);
+  setScreen(game, 'playing');
+  game.setMessage('The act restarts.');
+}
+
+function endRun(game, reason) {
   game.loseReason = reason;
-  game.setScreen('gameOver');
-  game.audio.lose();
-  game.emitHud();
-};
+  pushScreen(game, 'gameOver');
+}
 
-// Trip a camera or a laser: the caller adds House Suspicion first, then
-// this spends the strike. Called from guards.js.
-game.onTrip = (kind) => {
-  game.loseStrike(kind);
-};
+function nextLevel(game) {
+  popScreen(game);
+  loadLevel(game, game.levelIndex + 1);
+  game.state = 'playing';
+  game.setMessage('Act ' + (game.levelIndex + 1) + ': ' + game.level.name + '. ' + game.level.actGoal);
+}
 
-// Summary of the run so far, for the intermission and victory screens.
-game.actSummary = () => ({
-  act: game.levelIndex + 1,
-  name: game.level.name,
-  actPages: game.actPages,
-  campaignPages: game.pages,
-  score: game.score,
-  strikes: game.strikes,
-  heat: game.heat,
-  completedActs: game.completedActs.slice(),
-  next: game.levelIndex + 2,
-});
-
-// Deterministic showcase states for screenshots (?showcase=cover|act1|
-// act2complete|act5). A seeded LCG replaces Math.random for the showcase so
-// camera sweep angles and dust are reproducible. The showcase never changes
-// costs, durations, or detection; it only sets campaign state and level.
-game.applyShowcase = (name) => {
-  let seed = 12345;
-  Math.random = () => {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
-    return seed / 2147483648;
+export function actSummary(game) {
+  return {
+    act: game.levelIndex + 1,
+    name: game.level.name,
+    actPages: game.actPages,
+    campaignPages: game.pages,
+    score: game.score,
+    strikes: game.strikes,
+    heat: game.heat,
+    completedActs: game.completedActs.slice(),
+    next: game.levelIndex + 2,
   };
+}
+
+// --- Showcase states for the screenshots. Deterministic: guards start
+// on their first waypoint, cameras and lasers start at phase zero, and
+// the dust motes run off levelTime, so the same state renders the same.
+export function applyShowcase(game, name) {
+  startGame(game);
   if (name === 'cover') {
-    loadLevel(2);
+    loadLevel(game, 2);
     game.completedActs = [true, true, false, false, false];
     game.pages = 3;
     game.actPages = 1;
@@ -259,25 +249,28 @@ game.applyShowcase = (name) => {
     game.strikes = 2;
     game.heat = 35;
     game.levelTime = 145;
-    game.cues.suspicion = 42;
-    game.cues.tokens = 3;
-    game.player.coins = 2;
-    game.setScreen('playing');
+    game.suspicion = 42;
+    game.cueTokens = 3;
+    game.coins = 2;
+    // The objective stays visible in the shot: a readable objective
+    // is part of the cover.
+    game.objectiveTaken = false;
+    setScreen(game, 'playing');
   } else if (name === 'act1') {
-    loadLevel(0);
-    game.completedActs = [false, false, false, false, false];
+    loadLevel(game, 0);
     game.pages = 1;
     game.actPages = 1;
     game.score = 250;
     game.strikes = 3;
     game.heat = 0;
     game.levelTime = 18;
-    game.cues.suspicion = 12;
-    game.cues.tokens = 4;
-    game.player.coins = 2;
-    game.setScreen('playing');
+    game.suspicion = 12;
+    game.cueTokens = 4;
+    game.coins = 2;
+    game.objectiveTaken = false;
+    setScreen(game, 'playing');
   } else if (name === 'act2complete') {
-    loadLevel(1);
+    loadLevel(game, 1);
     game.completedActs = [true, true, false, false, false];
     game.pages = 2;
     game.actPages = 1;
@@ -286,9 +279,12 @@ game.applyShowcase = (name) => {
     game.heat = 25;
     game.actTimes[1] = 96;
     game.lastCompletedAct = 1;
-    game.pushScreen('intermission');
+    game.levelTime = 96;
+    game.objectiveTaken = true;
+    setScreen(game, 'playing');
+    pushScreen(game, 'intermission');
   } else if (name === 'act5') {
-    loadLevel(4);
+    loadLevel(game, 4);
     game.completedActs = [true, true, true, true, true];
     game.pages = 5;
     game.actPages = 1;
@@ -296,279 +292,194 @@ game.applyShowcase = (name) => {
     game.strikes = 1;
     game.heat = 60;
     game.totalTime = 612;
-    game.lastCompletedAct = 4;
-    game.pushScreen('victory');
-  }
-  game.emitHud();
-};
-
-game.onCaught = () => {
-  game.loseStrike('caught');
-};
-
-game.onCurtainDrop = () => {
-  game.endRun('House Suspicion hit 100 percent. The curtain drops.');
-};
-
-game.onLevelComplete = () => {
-  if (game.state !== 'playing') return;
-  game.ghostThisLevel = !game.spottedThisLevel;
-  let bonus = 500;
-  if (game.ghostThisLevel) bonus += 500;
-  bonus += Math.max(0, 300 - Math.floor(game.levelTime));
-  game.score += bonus;
-  game.completedActs[game.levelIndex] = true;
-  game.actTimes[game.levelIndex] = game.levelTime;
-  game.totalTime += game.levelTime;
-  game.lastCompletedAct = game.levelIndex;
-  game.heat = Math.max(0, game.heat - 10);
-  game.audio.win();
-  if (game.levelIndex >= LEVELS.length - 1) {
-    game.pushScreen('victory');
+    game.levelTime = 0;
+    game.objectiveTaken = true;
+    setScreen(game, 'playing');
+    pushScreen(game, 'victory');
   } else {
-    game.pushScreen('intermission');
+    setScreen(game, 'title');
+    return;
   }
-  game.emitHud();
-};
-
-function loadLevel(index) {
-  const level = LEVELS[index];
-  game.levelIndex = index;
-  game.level = level;
-  game.grid = level.map.map((row) => row.split(''));
-  const ent = levelEntities(game.grid);
-  game.player = makePlayer(ent.start);
-  game.player.coins = level.coins;
-  game.objective = ent.objective;
-  game.exit = ent.exit;
-  game.lamps = ent.lamps.concat((level.lamps || []).map(([tx, ty]) => ({
-    x: (tx + 0.5) * TILE,
-    y: (ty + 0.5) * TILE,
-  })));
-  game.guards = level.guards.map((g) => makeGuard(g, game.grid));
-  game.cameras = (level.cameras || []).map((c) => makeCamera(c));
-  game.lasers = (level.lasers || []).map((l) => ({ ...l, cooldown: 0 }));
-  game.vents = [];
-  for (const v of level.vents || []) {
-    game.vents.push({ x: (v[0] + 0.5) * TILE, y: (v[1] + 0.5) * TILE });
-    game.vents.push({ x: (v[2] + 0.5) * TILE, y: (v[3] + 0.5) * TILE });
+  // Deterministic guard and device state for the shot.
+  for (const g of game.guards) {
+    const start = tileCenter(game.level.guards[game.guards.indexOf(g)].waypoints[0][0], game.level.guards[game.guards.indexOf(g)].waypoints[0][1]);
+    g.x = start.x;
+    g.y = start.y;
+    g.dir = Math.PI / 2;
   }
-  game.desks = (level.desks || []).map(([tx, ty]) => ({
-    x: (tx + 0.5) * TILE,
-    y: (ty + 0.5) * TILE,
-    used: false,
-    near: false,
-  }));
-  game.crowd = (level.crowd || []).map(([tx, ty]) => ({
-    x: (tx + 0.5) * TILE,
-    y: (ty + 0.5) * TILE,
-  }));
-  game.followspot = level.followspot || null;
-  game.cues = makeCueBoard(level.cueTokens);
-  game.cues.sceneDuration = level.sceneDuration;
-  game.coinsThrown = [];
-  game.particles = [];
-  game.spottedThisLevel = false;
-  game.ghostThisLevel = false;
-  game.actPages = 0;
-  game.levelTime = 0;
-  game.message = '';
-  game.messageTimer = 0;
-  game.setMessage(level.name + '. ' + level.objective);
-  fitView();
-  game.emitHud();
+  for (const cam of game.cameras) cam.phase = 0;
+  for (const laser of game.lasers) laser.t = 0;
+  game.time = game.levelTime;
+  game.lux = playerLux(game);
 }
 
-function startGame() {
-  game.score = 0;
-  game.pages = 0;
-  game.spotted = 0;
-  game.strikes = 3;
-  game.heat = 0;
-  game.completedActs = [false, false, false, false, false];
-  game.actPages = 0;
-  game.actTimes = [0, 0, 0, 0, 0];
-  game.totalTime = 0;
-  game.lastCompletedAct = -1;
-  game.strikeReason = '';
-  loadLevel(0);
-  game.setScreen('playing');
+// --- The per-frame update. ---
+
+function updateStatus(game) {
+  const worst = worstSuspicion(game);
+  let sees = false;
+  for (const g of game.guards) {
+    if (g.seesPlayer) { sees = true; break; }
+  }
+  if (sees) game.status = game.lux >= 0.5 ? 'IN THE LIGHT' : 'MARKED';
+  else if (worst > 30) game.status = 'MARKED';
+  else game.status = 'UNSEEN';
 }
 
-function nextLevel() {
-  game.popScreen();
-  loadLevel(game.levelIndex + 1);
-  game.setScreen('playing');
-}
-
-function fitView() {
-  if (!game.grid.length || !game.grid[0]) return;
-  const gridW = game.grid[0].length * TILE;
-  const gridH = game.grid.length * TILE;
-  // The world view fits the space left after the anchored HUD: the campaign
-  // panel on the left, the side panel on the right, and the scaled top area
-  // (top bar plus goal and message lines). At the 1280x720 reference the
-  // rect is left 232, top 112, right 984, bottom 712, so the world never
-  // slides under the campaign panel or the goal and message lines.
-  const s = uiScale(game);
-  const panelW = uiPanelWidth(game);
-  const topH = uiTopHeight(game);
-  const left = Math.round(232 * s);
-  const right = game.canvasW - panelW - 8;
-  const bottom = game.canvasH - 8;
-  const availW = Math.max(200, right - left);
-  const availH = Math.max(200, bottom - topH);
-  const scale = Math.min(availW / gridW, availH / gridH);
-  game.view.scale = scale;
-  game.view.ox = left + (availW - gridW * scale) / 2;
-  game.view.oy = topH + (availH - gridH * scale) / 2;
-}
-
-function resize() {
-  game.canvasW = window.innerWidth;
-  game.canvasH = window.innerHeight;
-  // Scale the canvas buffer by devicePixelRatio (capped at 2) while the CSS
-  // size stays at the window size, so the game is sharp, not blurry.
-  game.dpr = Math.min(2, window.devicePixelRatio || 1);
-  canvas.width = Math.round(game.canvasW * game.dpr);
-  canvas.height = Math.round(game.canvasH * game.dpr);
-  fitView();
-}
-
-window.addEventListener('resize', resize);
-
-function screenToWorld(sx, sy) {
-  return {
-    x: (sx - game.view.ox) / game.view.scale,
-    y: (sy - game.view.oy) / game.view.scale,
-  };
-}
-
-game.input = makeInput(canvas, {
-  onKey(code) {
-    // Audio starts only after a user gesture, so start it on any keypress.
-    game.audio.ensure();
-    if (code === 'Enter') {
-      if (game.state === 'title') startGame();
-      else if (game.state === 'intermission') nextLevel();
-      else if (game.state === 'strikeLost') game.retryActAfterStrike();
-      else if (game.state === 'gameOver') startGame();
-      else if (game.state === 'victory') startGame();
-    }
-    if (code === 'Escape') {
-      if (game.state === 'playing') game.pushScreen('paused');
-      else if (game.state === 'paused') game.popScreen();
-      else if (game.state === 'strikeLost') game.retryActAfterStrike();
-    }
-    if (code === 'KeyR') {
-      if (game.state === 'playing' || game.state === 'paused' || game.state === 'gameOver' || game.state === 'strikeLost') {
-        loadLevel(game.levelIndex);
-        game.setScreen('playing');
-      }
-    }
-    if (code === 'KeyM') {
-      game.audio.ensure();
-      const muted = game.audio.toggleMute();
-      game.setMessage(muted ? 'Sound muted.' : 'Sound on.');
-    }
-    if (game.state === 'playing') {
-      if (code === 'Digit1') fireCue(game, 1);
-      if (code === 'Digit2') fireCue(game, 2);
-      if (code === 'Digit3') fireCue(game, 3);
-      if (code === 'Digit4') fireCue(game, 4);
-    }
-  },
-  onClick(sx, sy) {
-    // Audio starts only after a user gesture, so start it on the first click.
-    game.audio.ensure();
-    if (game.state === 'title') {
-      startGame();
-      return;
-    }
-    if (game.state === 'playing') {
-      const w = screenToWorld(sx, sy);
-      throwCoin(game, w.x, w.y);
-    }
-  },
-});
-
-function update(dt) {
-  game.time += dt;
+function update(game, dt) {
   if (game.state !== 'playing') return;
+  game.time += dt;
   game.levelTime += dt;
-  if (game.messageTimer > 0) {
-    game.messageTimer -= dt;
-    if (game.messageTimer <= 0) {
-      game.message = '';
-      game.emitHud();
-    }
+  // The Show Clock: a new scene every 45 seconds. A storm act strobes.
+  const scene = Math.floor(game.levelTime / SCENE_LEN) % 3;
+  if (scene !== game.sceneIndex) {
+    game.sceneIndex = scene;
+    if (game.level.gel === 'storm') game.strobe = 1;
+  }
+  if (game.strobe > 0) game.strobe = Math.max(0, game.strobe - dt * 2);
+  if (game.messageT > 0) game.messageT -= dt;
+  if (game.coinLure) {
+    game.coinLure.t -= dt;
+    if (game.coinLure.t <= 0) game.coinLure = null;
+  }
+  for (let i = game.coinsThrown.length - 1; i >= 0; i--) {
+    game.coinsThrown[i].t -= dt;
+    if (game.coinsThrown[i].t <= 0) game.coinsThrown.splice(i, 1);
   }
   updateCues(game, dt);
-  updatePlayer(game, dt);
-  updatePlayerLight(game);
-  for (const g of game.guards) updateGuard(game, g, dt);
-  for (const cam of game.cameras) updateCamera(game, cam, dt);
+  updatePlayer(game, dt, game.input);
+  if (game.state !== 'playing') return;
+  updateGuards(game, dt);
+  if (game.state !== 'playing') return;
+  updateCameras(game, dt);
+  if (game.state !== 'playing') return;
   updateLasers(game, dt);
-  updateParticles(dt);
-  spawnDust(dt);
-  // Detection state is event driven: the HUD snapshot updates only when
-  // the label actually changes, not every frame.
-  const label = detectionLabel(game);
-  if (label !== game.hud.detection) game.emitHud();
-  if (game.cues.suspicion >= 100) game.onCurtainDrop();
+  if (game.state !== 'playing') return;
+  game.lux = playerLux(game);
+  updateStatus(game);
 }
 
-let dustTimer = 0;
-function spawnDust(dt) {
-  dustTimer -= dt;
-  if (dustTimer > 0 || game.lamps.length === 0) return;
-  dustTimer = 0.25;
-  const lamp = game.lamps[Math.floor(Math.random() * game.lamps.length)];
-  game.particles.push({
-    x: lamp.x + (Math.random() - 0.5) * 70,
-    y: lamp.y + (Math.random() - 0.5) * 70,
-    vx: (Math.random() - 0.5) * 6,
-    vy: 4 + Math.random() * 6,
-    life: 2.5,
-    maxLife: 2.5,
-    size: 1 + Math.random() * 1.5,
-    color: 'rgba(245, 220, 150, 0.8)',
-  });
-}
+// --- Input: screen transitions and cues. Called once per frame. ---
 
-function updateParticles(dt) {
-  for (const pt of game.particles) {
-    pt.x += pt.vx * dt;
-    pt.y += pt.vy * dt;
-    pt.life -= dt;
+function handleInput(game) {
+  const input = game.input;
+  if (game.state === 'title') {
+    if (input.hit('Enter')) {
+      game.sound.unlock();
+      game.sound.click();
+      startGame(game);
+    }
+    return;
   }
-  game.particles = game.particles.filter((pt) => pt.life > 0);
+  if (game.state === 'playing') {
+    if (input.hit('Escape')) {
+      pushScreen(game, 'paused');
+      return;
+    }
+    if (input.hit('KeyR')) {
+      retryAct(game);
+      return;
+    }
+    for (const cue of ['1', '2', '3', '4']) {
+      if (input.hit('Digit' + cue)) {
+        const c = cueByKey(cue);
+        if (c) fireCue(game, c.id);
+        return;
+      }
+    }
+    return;
+  }
+  if (game.state === 'paused') {
+    if (input.hit('Escape')) {
+      popScreen(game);
+      return;
+    }
+    if (input.hit('KeyR')) {
+      retryAct(game);
+      return;
+    }
+    return;
+  }
+  if (game.state === 'intermission') {
+    if (input.hit('Enter')) {
+      game.sound.click();
+      nextLevel(game);
+    }
+    return;
+  }
+  if (game.state === 'strikeLost') {
+    if (input.hit('Enter') || input.hit('Escape')) {
+      game.sound.click();
+      retryActAfterStrike(game);
+    }
+    return;
+  }
+  if (game.state === 'victory') {
+    if (input.hit('Enter')) {
+      game.sound.click();
+      startGame(game);
+    }
+    return;
+  }
+  if (game.state === 'gameOver') {
+    if (input.hit('Enter') || input.hit('KeyR')) {
+      game.sound.click();
+      startGame(game);
+    }
+    return;
+  }
 }
 
-let last = performance.now();
-let acc = 0;
-function frame(now) {
-  const frameDt = Math.min(0.1, (now - last) / 1000);
-  last = now;
-  acc += frameDt;
-  while (acc >= STEP) {
-    update(STEP);
-    acc -= STEP;
+// --- Boot. ---
+
+export function boot() {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const game = createGame();
+  addMethods(game);
+  game.actSummary = () => actSummary(game);
+  game.view = createView();
+  game.input = createInput(canvas);
+  game.input.attach();
+  const params = new URLSearchParams(location.search);
+  const showcase = params.get('showcase');
+  if (showcase) {
+    applyShowcase(game, showcase);
+  } else {
+    setScreen(game, 'title');
   }
-  // All drawing happens in CSS pixel coordinates; the transform maps them
-  // onto the DPR scaled buffer.
-  ctx.setTransform(game.dpr, 0, 0, game.dpr, 0, 0);
-  drawGame(ctx, game);
+  let last = 0;
+  let acc = 0;
+  function frame(t) {
+    requestAnimationFrame(frame);
+    const now = t / 1000;
+    if (!last) last = now;
+    const dt = Math.min(0.1, now - last);
+    last = now;
+    handleInput(game);
+    acc += dt;
+    let n = 0;
+    while (acc >= STEP && n < 4) {
+      update(game, STEP);
+      acc -= STEP;
+      n++;
+    }
+    if (n === 4) acc = 0;
+    draw(game, ctx);
+    game.input.endFrame();
+  }
   requestAnimationFrame(frame);
+  // Expose the game for debugging and for the play-test driver.
+  window.__game = game;
+  return game;
 }
 
-resize();
-const showcase = new URLSearchParams(location.search).get('showcase');
-if (showcase) {
-  game.applyShowcase(showcase);
-} else {
-  loadLevel(0);
-  game.setScreen('title');
+// Fit the view rect to the canvas. The playfield leaves room for the
+// CAMPAIGN panel on the left (x 16..216) and the right panel (x 992..).
+// The rect is left 232, top 80, right 984, bottom 704; the world is
+// centered inside it by createView.
+export function fitView() {
+  return createView();
 }
-window.__game = game;
-requestAnimationFrame(frame);
+
+boot();
