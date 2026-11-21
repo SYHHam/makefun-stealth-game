@@ -300,6 +300,10 @@ export function applyShowcase(game, name) {
     setScreen(game, 'title');
     return;
   }
+  // Showcase states are mid-act, long past the act start, so the
+  // act-start banner must not linger in the shot.
+  game.message = '';
+  game.messageT = 0;
   // Deterministic guard and device state for the shot.
   for (const g of game.guards) {
     const start = tileCenter(game.level.guards[game.guards.indexOf(g)].waypoints[0][0], game.level.guards[game.guards.indexOf(g)].waypoints[0][1]);

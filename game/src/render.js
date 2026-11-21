@@ -15,7 +15,7 @@ export const CANVAS_H = 720;
 const VIEW = { left: 232, top: 80, right: 984, bottom: 704 };
 const PANEL_X = 992;
 const PANEL_W = 272;
-const CAMPAIGN = { x: 16, y: 160, w: 200, h: 208 };
+const CAMPAIGN = { x: 16, y: 160, w: 200, h: 232 };
 
 const GOLD = '#c9a227';
 const GOLD_DIM = '#8a7a3a';
@@ -135,7 +135,6 @@ function drawTopBar(game, ctx) {
 function drawGoalLines(game, ctx) {
   const level = game.level;
   sans(ctx, 'Goal: ' + level.goal, 16, 82, 14, CREAM);
-  sans(ctx, 'Act ' + (game.levelIndex + 1) + ': ' + level.name + '. ' + level.actGoal, 16, 104, 13, MUTED, 'left', false, true);
 }
 
 // The CAMPAIGN panel: five acts, current highlighted, completed checked.
@@ -149,7 +148,7 @@ function drawCampaignPanel(game, ctx) {
   sans(ctx, 'CAMPAIGN   ACT ' + (game.levelIndex + 1) + ' / 5', x + 10, y + 20, 13, GOLD, 'left', true);
   for (let i = 0; i < ACT_ITINERARY.length; i++) {
     const act = ACT_ITINERARY[i];
-    const ry = y + 28 + i * 22;
+    const ry = y + 36 + i * 22;
     const done = game.completedActs[i];
     const current = i === game.levelIndex;
     if (current) {
@@ -163,7 +162,7 @@ function drawCampaignPanel(game, ctx) {
     sans(ctx, label, x + 10, ry, 12, color, 'left', current);
     ctx.globalAlpha = 1;
   }
-  const divY = y + 28 + 5 * 22 + 4;
+  const divY = y + 36 + 5 * 22 + 4;
   ctx.strokeStyle = GOLD_DIM;
   ctx.beginPath();
   ctx.moveTo(x + 10, divY);
