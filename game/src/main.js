@@ -285,7 +285,6 @@ export function applyShowcase(game, name) {
       { anchor: spawn, plate: [232, 648, 220], label: 'YOU', sentence: 'The understudy. In shadow, unseen.' },
       { anchor: obj, plate: [700, 88, 280], label: 'THE SCORE', sentence: 'The Composer\u2019s score, left unguarded.' },
       { anchor: exit, plate: [740, 648, 240], label: 'STAGE DOOR', sentence: 'Opens once you hold the score.' },
-      { anchor: { x: 996, y: 190 }, screen: true, plate: [483, 648, 240], label: 'CUE BOARD', sentence: 'Four cues. Each one changes the room.', elbow: 'v' },
     ];
     setScreen(game, 'playing');
   } else if (name === 'act1') {
@@ -335,7 +334,6 @@ export function applyShowcase(game, name) {
     game.callouts = [
       { anchor: coin, plate: [252, 88, 240], label: 'COIN', sentence: 'Pulls a guard off their mark.' },
       { anchor: { x: g.x, y: g.y }, plate: [745, 648, 260], label: 'GUARD', sentence: 'He heard it. Off to look.' },
-      { anchor: { x: 996, y: 190 }, screen: true, plate: [483, 648, 240], label: 'CUE BOARD', sentence: 'Fog Drum is running. Cones shrink.', elbow: 'v' },
     ];
     setScreen(game, 'playing');
   } else if (name === 'spotted') {

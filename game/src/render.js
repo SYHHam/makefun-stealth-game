@@ -646,7 +646,8 @@ function drawRightPanel(game, ctx) {
   y += 56;
   // FIELD NOTES replaces the color key and the controls. It teaches
   // the house rules and narrates the current situation live.
-  drawFieldNotes(game, ctx, x, y, w);
+  // Shifted 4px right so the icon chips clear the panel edge.
+  drawFieldNotes(game, ctx, x + 4, y, w - 4);
 }
 
 function drawWorld(game, ctx, view) {
