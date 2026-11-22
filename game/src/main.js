@@ -65,6 +65,17 @@ export function createGame() {
     message: '',
     messageT: 0,
     started: false,
+    // Telemetry only, never gameplay: a position log for the Curtain
+    // Call route map, and counters for the debrief stats.
+    routeLog: [],
+    routeLogT: 0,
+    coinsThrownTotal: 0,
+    closeCalls: 0,
+    // Render-only staging: callouts and the live FIELD NOTES row for
+    // the current screenshot. A showcase sets these; live play leaves
+    // them unset and the render derives them from state.
+    callouts: null,
+    fieldNotesRow: null,
   };
 }
 
@@ -107,6 +118,10 @@ export function loadLevel(game, index) {
   game.coinsThrown = [];
   game.status = 'UNSEEN';
   game.lux = 0.3;
+  // The route log is per act, so the Curtain Call map draws the
+  // route through the final act only.
+  game.routeLog = [];
+  game.routeLogT = 0;
   // The banner always names the act just loaded, so a showcase that
   // jumps to a later act never shows a stale earlier act's banner.
   game.setMessage('Act ' + (index + 1) + ': ' + game.level.name + '. ' + game.level.actGoal);
@@ -240,6 +255,9 @@ export function actSummary(game) {
 // the dust motes run off levelTime, so the same state renders the same.
 export function applyShowcase(game, name) {
   startGame(game);
+  // Clear any staging from a previous showcase.
+  game.callouts = null;
+  game.fieldNotesRow = null;
   if (name === 'cover') {
     loadLevel(game, 2);
     game.completedActs = [true, true, false, false, false];
@@ -255,6 +273,20 @@ export function applyShowcase(game, name) {
     // The objective stays visible in the shot: a readable objective
     // is part of the cover.
     game.objectiveTaken = false;
+    game.fieldNotesRow = 2;
+    // Five annotated callouts, clockwise from top-left. Plates sit in
+    // the dark top and bottom margins of the playfield.
+    const lamp = tileCenter(9, 2);
+    const obj = tileCenter(game.level.objective.x, game.level.objective.y);
+    const exit = tileCenter(game.level.exit.x, game.level.exit.y);
+    const spawn = tileCenter(2, 13);
+    game.callouts = [
+      { anchor: lamp, plate: [252, 88, 260], label: 'FOOTLIGHT', sentence: 'Lit boards, seen from across the house.' },
+      { anchor: spawn, plate: [232, 648, 220], label: 'YOU', sentence: 'The understudy. In shadow, unseen.' },
+      { anchor: obj, plate: [700, 88, 280], label: 'THE SCORE', sentence: 'The Composer\u2019s score, left unguarded.' },
+      { anchor: exit, plate: [740, 648, 240], label: 'STAGE DOOR', sentence: 'Opens once you hold the score.' },
+      { anchor: { x: 996, y: 190 }, screen: true, plate: [483, 648, 240], label: 'CUE BOARD', sentence: 'Four cues. Each one changes the room.', elbow: 'v' },
+    ];
     setScreen(game, 'playing');
   } else if (name === 'act1') {
     loadLevel(game, 0);
@@ -268,6 +300,87 @@ export function applyShowcase(game, name) {
     game.cueTokens = 4;
     game.coins = 2;
     game.objectiveTaken = false;
+    setScreen(game, 'playing');
+  } else if (name === 'coin') {
+    // S2 "The Coin & The Cue": Act 1, a coin just thrown, the nearest
+    // guard turning toward it, and FOG DRUM mid-call.
+    loadLevel(game, 0);
+    game.pages = 1;
+    game.actPages = 1;
+    game.score = 250;
+    game.strikes = 3;
+    game.heat = 5;
+    game.levelTime = 34;
+    game.suspicion = 18;
+    game.cueTokens = 3;
+    game.coins = 1;
+    game.objectiveTaken = false;
+    // The player near the spawn, the coin ahead on the boards.
+    const p = tileCenter(4, 11);
+    game.player.x = p.x;
+    game.player.y = p.y;
+    game.player.dir = Math.PI / 4;
+    const coin = tileCenter(9, 8);
+    game.coinLure = { x: coin.x, y: coin.y, t: 4 };
+    game.coinsThrown = [{ x: coin.x, y: coin.y, t: 0.6 }];
+    // The nearest guard turns toward the coin.
+    const g = game.guards[0];
+    g.state = 'investigate';
+    g.investigate = { x: coin.x, y: coin.y };
+    g.dir = Math.atan2(coin.y - g.y, coin.x - g.x);
+    g.suspicion = 25;
+    // FOG DRUM mid-call.
+    game.cueFx.fog = 6;
+    game.fieldNotesRow = 5;
+    game.callouts = [
+      { anchor: coin, plate: [252, 88, 240], label: 'COIN', sentence: 'Pulls a guard off their mark.' },
+      { anchor: { x: g.x, y: g.y }, plate: [745, 648, 260], label: 'GUARD', sentence: 'He heard it. Off to look.' },
+      { anchor: { x: 996, y: 190 }, screen: true, plate: [483, 648, 240], label: 'CUE BOARD', sentence: 'Fog Drum is running. Cones shrink.', elbow: 'v' },
+    ];
+    setScreen(game, 'playing');
+  } else if (name === 'spotted') {
+    // S3 "SPOTTED": Act 1, a guard in chase with the player inside
+    // the red cone, ALARM on the DETECTION panel.
+    loadLevel(game, 0);
+    game.pages = 1;
+    game.actPages = 1;
+    game.score = 250;
+    game.strikes = 3;
+    game.heat = 20;
+    game.levelTime = 52;
+    game.suspicion = 68;
+    game.cueTokens = 4;
+    game.coins = 2;
+    game.objectiveTaken = false;
+    // The player caught in the open, lit, inside the guard cone.
+    const p = tileCenter(10, 6);
+    game.player.x = p.x;
+    game.player.y = p.y;
+    game.player.dir = Math.PI;
+    // The nearest guard chasing the player, far enough that it cannot
+    // reach the player before the shot is taken. Speed 0 freezes the
+    // chase in place: the cone stays on the player, the guard does
+    // not close the distance during the showcase wait.
+    const g0 = game.guards[0];
+    g0.state = 'chase';
+    g0.suspicion = 100;
+    g0.seesPlayer = true;
+    g0.speed = 0;
+    const gp = tileCenter(7, 3);
+    g0.x = gp.x;
+    g0.y = gp.y;
+    g0.dir = Math.atan2(p.y - gp.y, p.x - gp.x);
+    // A second guard converging from the other side.
+    const g1 = game.guards[1];
+    g1.state = 'chase';
+    g1.suspicion = 85;
+    g1.seesPlayer = true;
+    g1.speed = 0;
+    const gp1 = tileCenter(14, 10);
+    g1.x = gp1.x;
+    g1.y = gp1.y;
+    g1.dir = Math.atan2(p.y - gp1.y, p.x - gp1.x);
+    game.fieldNotesRow = 4;
     setScreen(game, 'playing');
   } else if (name === 'act2complete') {
     loadLevel(game, 1);
@@ -294,6 +407,20 @@ export function applyShowcase(game, name) {
     game.totalTime = 612;
     game.levelTime = 0;
     game.objectiveTaken = true;
+    // Staged debrief numbers: a clean ghost run.
+    game.spotted = 0;
+    game.closeCalls = 0;
+    game.coinsThrownTotal = 2;
+    // A synthetic route for the debrief map: spawn, around the wings,
+    // to the score, then out the door. Tile coords on Act 5.
+    const routeTiles = [
+      [2, 13], [4, 13], [5, 11], [5, 8], [8, 8], [10, 6], [12, 4],
+      [15, 3], [18, 2], [20, 2], [20, 5], [18, 8], [19, 10], [21, 11], [21, 13],
+    ];
+    game.routeLog = routeTiles.map(([tx, ty]) => {
+      const c = tileCenter(tx, ty);
+      return { x: c.x, y: c.y };
+    });
     setScreen(game, 'playing');
     pushScreen(game, 'victory');
   } else {
@@ -334,6 +461,15 @@ function update(game, dt) {
   if (game.state !== 'playing') return;
   game.time += dt;
   game.levelTime += dt;
+  // Route telemetry: log the player position every quarter second,
+  // capped so a long run cannot grow the log without bound.
+  game.routeLogT += dt;
+  if (game.routeLogT >= 0.25) {
+    game.routeLogT = 0;
+    if (game.routeLog.length < 3000) {
+      game.routeLog.push({ x: game.player.x, y: game.player.y });
+    }
+  }
   // The Show Clock: a new scene every 45 seconds. A storm act strobes.
   const scene = Math.floor(game.levelTime / SCENE_LEN) % 3;
   if (scene !== game.sceneIndex) {

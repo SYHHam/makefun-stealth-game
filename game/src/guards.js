@@ -193,7 +193,13 @@ export function updateGuards(game, dt) {
     const sees = guardSeesPlayer(game, g);
     g.seesPlayer = sees;
     if (sees) {
+      const prev = g.suspicion;
       g.suspicion = Math.min(100, g.suspicion + 55 * dt);
+      // A close call: suspicion crosses 70, once per guard per rise.
+      if (prev < 70 && g.suspicion >= 70 && !g.closeCallCounted) {
+        g.closeCallCounted = true;
+        game.closeCalls = (game.closeCalls || 0) + 1;
+      }
       g.lastSeen = { x: p.x, y: p.y };
       if (g.suspicion >= 100 && g.state !== 'chase') {
         g.state = 'chase';
@@ -202,6 +208,7 @@ export function updateGuards(game, dt) {
       }
     } else {
       g.suspicion = Math.max(0, g.suspicion - 12 * dt);
+      if (g.suspicion < 30) g.closeCallCounted = false;
       if (g.state === 'chase' && g.suspicion <= 0) g.state = 'suspicious';
       else if (g.state === 'suspicious' && g.suspicion <= 0) g.state = 'patrol';
     }

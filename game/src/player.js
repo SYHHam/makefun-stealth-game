@@ -150,6 +150,7 @@ export function throwCoin(game, cx, cy) {
   const target = game.view ? game.view.toWorld(cx, cy) : null;
   if (!target) return;
   game.coins -= 1;
+  game.coinsThrownTotal = (game.coinsThrownTotal || 0) + 1;
   game.coinLure = { x: target.x, y: target.y, t: 4 };
   game.coinsThrown.push({ x: target.x, y: target.y, t: 0.6 });
   game.sound.coin();

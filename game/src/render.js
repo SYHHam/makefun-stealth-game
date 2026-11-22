@@ -90,6 +90,230 @@ function visibilityWord(lux) {
   return 'DARK';
 }
 
+// FIELD NOTES: Lampblack's pattern, adapted to the opera house. Eight
+// rows, exact copy, each with an icon chip carrying a semantic color.
+// One row is live-highlighted for the current situation; the others
+// sit at 70%. Row indices: 0 guard, 1 footlight, 2 shadow, 3 curtain,
+// 4 detection, 5 coin, 6 cue board, 7 stage door.
+const FIELD_NOTES = [
+  { icon: 'cone', color: AMBER, text: 'GUARD & CONE, he sees what it touches.' },
+  { icon: 'lamp', color: AMBER, text: 'FOOTLIGHT, lit tiles, seen from afar.' },
+  { icon: 'moon', color: '#7fa8e0', text: 'SHADOW, dark tiles are safe.' },
+  { icon: 'curtain', color: '#c04050', text: 'CURTAIN, hidden unless he is close.' },
+  { icon: 'lamp3', color: null, text: 'QUIET to SUSPICIOUS to ALARM, three steps.' },
+  { icon: 'coin', color: '#e8c860', text: 'COIN, rings where it lands; he walks to it.' },
+  { icon: 'lever', color: '#e8c860', text: 'CUE BOARD, one call rewires the room.' },
+  { icon: 'door', color: GOLD, text: 'STAGE DOOR, opens once you hold the score.' },
+];
+
+// Which FIELD NOTES row is live for the current situation. A showcase
+// may set game.fieldNotesRow explicitly; otherwise it is derived.
+function fieldNotesRow(game) {
+  if (typeof game.fieldNotesRow === 'number') return game.fieldNotesRow;
+  const det = detectionState(game);
+  if (det.word === 'ALARM') return 4;
+  if (game.coinLure) return 5;
+  if (game.lux < 0.25 || eyesOnPlayer(game) === 0) return 2;
+  return 0;
+}
+
+function drawFieldNotesIcon(ctx, icon, x, y, color) {
+  // 18px chip: a small colored square with a glyph drawn in it.
+  ctx.fillStyle = color || '#2a2118';
+  ctx.fillRect(x, y, 18, 18);
+  ctx.strokeStyle = GOLD_DIM;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, 18, 18);
+  ctx.fillStyle = '#0d0a08';
+  if (icon === 'cone') {
+    ctx.beginPath();
+    ctx.moveTo(x + 9, y + 3);
+    ctx.lineTo(x + 15, y + 15);
+    ctx.lineTo(x + 3, y + 15);
+    ctx.closePath();
+    ctx.fill();
+  } else if (icon === 'lamp') {
+    ctx.beginPath();
+    ctx.arc(x + 9, y + 9, 4, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (icon === 'moon') {
+    ctx.beginPath();
+    ctx.arc(x + 9, y + 9, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = color || '#7fa8e0';
+    ctx.beginPath();
+    ctx.arc(x + 11, y + 7, 4, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (icon === 'curtain') {
+    ctx.fillRect(x + 4, y + 3, 3, 12);
+    ctx.fillRect(x + 8, y + 3, 3, 12);
+    ctx.fillRect(x + 12, y + 3, 3, 12);
+  } else if (icon === 'lamp3') {
+    ctx.fillStyle = '#4dd8a0';
+    ctx.beginPath();
+    ctx.arc(x + 4, y + 9, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = AMBER;
+    ctx.beginPath();
+    ctx.arc(x + 9, y + 9, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = RED;
+    ctx.beginPath();
+    ctx.arc(x + 14, y + 9, 3, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (icon === 'coin') {
+    ctx.beginPath();
+    ctx.arc(x + 9, y + 9, 5, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (icon === 'lever') {
+    ctx.fillRect(x + 8, y + 3, 2, 9);
+    ctx.beginPath();
+    ctx.arc(x + 9, y + 4, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(x + 4, y + 13, 10, 2);
+  } else if (icon === 'door') {
+    ctx.strokeStyle = '#0d0a08';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 4, y + 4, 10, 11);
+    ctx.beginPath();
+    ctx.moveTo(x + 4, y + 4);
+    ctx.lineTo(x + 9, y + 2);
+    ctx.lineTo(x + 14, y + 4);
+    ctx.stroke();
+  }
+}
+
+function drawFieldNotes(game, ctx, x, y, w) {
+  // Header.
+  sans(ctx, 'FIELD NOTES', x, y + 6, 13, GOLD, 'left', true);
+  sans(ctx, 'how the house watches', x, y + 20, 10, MUTED);
+  ctx.strokeStyle = GOLD;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x, y + 26.5);
+  ctx.lineTo(x + w - 16, y + 26.5);
+  ctx.stroke();
+  const active = fieldNotesRow(game);
+  const rowH = 24;
+  for (let i = 0; i < FIELD_NOTES.length; i++) {
+    const row = FIELD_NOTES[i];
+    const ry = y + 30 + i * rowH;
+    const isActive = i === active;
+    const isAlarm = isActive && i === 4 && detectionState(game).word === 'ALARM';
+    // Live row: full bone text with a 2px gold left bar; alarm row red.
+    if (isActive) {
+      ctx.fillStyle = isAlarm ? 'rgba(255, 59, 78, 0.18)' : 'rgba(201, 162, 39, 0.12)';
+      ctx.fillRect(x - 4, ry - 2, w - 8, rowH - 2);
+      ctx.fillStyle = isAlarm ? RED : GOLD;
+      ctx.fillRect(x - 4, ry - 2, 2, rowH - 2);
+    }
+    drawFieldNotesIcon(ctx, row.icon, x, ry + 2, row.color);
+    const tColor = isActive ? (isAlarm ? '#ff9a7a' : CREAM) : 'rgba(232, 220, 192, 0.7)';
+    sans(ctx, row.text, x + 24, ry + 16, 11, tColor);
+  }
+  return y + 30 + FIELD_NOTES.length * rowH;
+}
+
+// Annotated callouts: Lampblack's pattern. A 5px dot at the anchor, a
+// 2px bone leader line with a 1px dark halo and one 90 degree elbow,
+// and a label plate in a dark margin. The plate carries a gold
+// small-caps label and one plain sentence, max 8 words.
+const BONE = '#f2e6c8';
+const PLATE_BG = 'rgba(18, 16, 26, 0.88)';
+const PLATE_GOLD = '#e8c15a';
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+
+// Draw one callout. anchor is world coords unless c.screen is set,
+// in which case it is already screen coords. plate is screen coords
+// (top-left x, y and width). Height is measured from the text.
+// elbow 'v' goes vertical first then horizontal (for HUD anchors),
+// default 'h' goes horizontal first then vertical.
+function drawCallout(ctx, view, anchor, plateX, plateY, plateW, label, sentence, isScreen, elbow) {
+  const a = isScreen ? anchor : view.toScreen(anchor.x, anchor.y);
+  // Measure the plate: label 14px bold, sentence 13px, padding 10px.
+  ctx.font = 'bold 14px Arial, sans-serif';
+  const labelW = ctx.measureText(label).width;
+  ctx.font = '13px Arial, sans-serif';
+  const sentW = ctx.measureText(sentence).width;
+  const pw = Math.max(plateW, labelW + 20, sentW + 20);
+  const ph = 48;
+  const cx = plateX + pw / 2;
+  // The leader connects to the plate edge nearest the anchor.
+  let ey = plateY;
+  if (a.y > plateY + ph) ey = plateY + ph;
+  else if (a.y < plateY) ey = plateY;
+  // Elbow: one 90 degree bend, no diagonals.
+  let mx, my;
+  if (elbow === 'v') {
+    mx = a.x;
+    my = ey;
+  } else {
+    mx = cx;
+    my = a.y;
+  }
+  // Dark halo under the bone line.
+  ctx.strokeStyle = '#0b0e1a';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(mx, my);
+  ctx.lineTo(cx, ey);
+  ctx.stroke();
+  // Bone leader.
+  ctx.strokeStyle = BONE;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(mx, my);
+  ctx.lineTo(cx, ey);
+  ctx.stroke();
+  // Anchor dot.
+  ctx.fillStyle = BONE;
+  ctx.beginPath();
+  ctx.arc(a.x, a.y, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#0b0e1a';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  // Plate.
+  roundRectPath(ctx, plateX, plateY, pw, ph, 6);
+  ctx.fillStyle = PLATE_BG;
+  ctx.fill();
+  ctx.strokeStyle = PLATE_GOLD;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  // Label in gold small-caps, sentence in bone.
+  ctx.save();
+  if (typeof ctx.letterSpacing !== 'undefined') ctx.letterSpacing = '1.5px';
+  sans(ctx, label, plateX + 10, plateY + 20, 14, PLATE_GOLD, 'left', true);
+  ctx.restore();
+  sans(ctx, sentence, plateX + 10, plateY + 38, 13, BONE);
+}
+
+// Draw all callouts for the current shot. Each callout is
+// { anchor: {x, y} (world, or screen if screen: true),
+//   plate: [x, y, w] (screen), label, sentence }.
+function drawCallouts(game, ctx, view) {
+  const list = game.callouts;
+  if (!list || !list.length) return;
+  for (const c of list) {
+    drawCallout(ctx, view, c.anchor, c.plate[0], c.plate[1], c.plate[2], c.label, c.sentence, !!c.screen, c.elbow);
+  }
+}
+
 // The view maps world pixels (768 by 512) into the playfield rect.
 export function createView() {
   const worldW = COLS * TILE;
@@ -420,24 +644,9 @@ function drawRightPanel(game, ctx) {
   sans(ctx, 'Coins left: ' + game.coins, x, y + 22, 12, CREAM);
   sans(ctx, 'Goal: steal the score page', x, y + 38, 12, CREAM, 'left', true);
   y += 56;
-  // The color key replaces the whole legend. Two short lines: the
-  // full key does not fit the panel on one line at a readable size.
-  sans(ctx, 'RED = SEEN \u00B7 GOLD = GOAL', x, y + 6, 11, CREAM, 'left', true);
-  sans(ctx, 'CYAN = YOU \u00B7 VIOLET = CUE', x, y + 22, 11, CREAM, 'left', true);
-  y += 38;
-  sans(ctx, 'CONTROLS', x, y + 6, 13, GOLD, 'left', true);
-  const controls = [
-    'WASD / arrows: move',
-    'Shift: sneak (slow, silent)',
-    'Space: sprint (fast, loud)',
-    'E: interact, hide, pick up, vent',
-    'Click: throw a coin decoy',
-    '1-4: fire a stage cue',
-    'Esc: pause    R: retry act',
-  ];
-  for (let i = 0; i < controls.length; i++) {
-    sans(ctx, controls[i], x, y + 24 + i * 15, 11, MUTED);
-  }
+  // FIELD NOTES replaces the color key and the controls. It teaches
+  // the house rules and narrates the current situation live.
+  drawFieldNotes(game, ctx, x, y, w);
 }
 
 function drawWorld(game, ctx, view) {
@@ -684,6 +893,26 @@ function drawWorld(game, ctx, view) {
     ctx.beginPath();
     ctx.arc(p.x, p.y, 12 + 4 * Math.sin(game.time * 6), 0, Math.PI * 2);
     ctx.stroke();
+    // Dotted brass arc from the player to the coin: the throw path.
+    const pp = view.toScreen(game.player.x, game.player.y);
+    const dx = p.x - pp.x;
+    const dy = p.y - pp.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 24) {
+      const mx = (pp.x + p.x) / 2;
+      const my = (pp.y + p.y) / 2 - Math.min(46, dist * 0.3);
+      ctx.fillStyle = '#e8c860';
+      const steps = Math.max(6, Math.floor(dist / 14));
+      for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        const qx = (1 - t) * (1 - t) * pp.x + 2 * (1 - t) * t * mx + t * t * p.x;
+        const qy = (1 - t) * (1 - t) * pp.y + 2 * (1 - t) * t * my + t * t * p.y;
+        ctx.beginPath();
+        ctx.arc(qx, qy, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // Callout for the coin, drawn in the label pass via game.callouts.
   }
   // All cones in one red family, via the threat layer.
   drawConeLayer(game, ctx, view);
@@ -704,7 +933,8 @@ function drawWorld(game, ctx, view) {
     }
   }
   // Guards: charcoal bodies with a red epaulette, state pip above.
-  for (const g of game.guards) {
+  for (let gi = 0; gi < game.guards.length; gi++) {
+    const g = game.guards[gi];
     const p = view.toScreen(g.x, g.y);
     ctx.fillStyle = CHARCOAL;
     ctx.beginPath();
@@ -725,6 +955,28 @@ function drawWorld(game, ctx, view) {
     else if (g.state === 'investigate' || g.state === 'suspicious') { pip = '?'; pipColor = AMBER; }
     if (pip) {
       sans(ctx, pip, p.x, p.y - 16, 14, pipColor, 'center', true);
+    }
+    // Speech bubble while chasing: "Coming!" or "Thief! There!".
+    if (g.state === 'chase') {
+      const say = gi % 2 === 0 ? 'Thief! There!' : 'Coming!';
+      ctx.font = 'bold 12px Arial, sans-serif';
+      const sw = ctx.measureText(say).width + 16;
+      const bx = p.x - sw / 2;
+      const by = p.y - 52;
+      ctx.fillStyle = '#f2e6c8';
+      roundRectPath(ctx, bx, by, sw, 22, 5);
+      ctx.fill();
+      ctx.strokeStyle = '#0b0e1a';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(p.x - 5, by + 22);
+      ctx.lineTo(p.x + 5, by + 22);
+      ctx.lineTo(p.x, by + 30);
+      ctx.closePath();
+      ctx.fillStyle = '#f2e6c8';
+      ctx.fill();
+      sans(ctx, say, p.x, by + 15, 12, '#8b1a1a', 'center', true);
     }
     // "WHAT WAS THAT?" tag on the turn to investigate: rises and fades.
     let tag = guardTags.get(g);
@@ -958,17 +1210,149 @@ function drawStrikeLost(game, ctx) {
 
 function drawVictory(game, ctx) {
   dimWorld(ctx);
-  const x = 300, y = 90, w = 680, h = 540;
+  // Wide card: route map on the left, debrief on the right.
+  const x = 90, y = 60, w = 1100, h = 600;
   card(ctx, x, y, w, h);
-  text(ctx, 'CURTAIN CALL', CANVAS_W / 2, y + 70, 44, GOLD, 'center', true);
-  sans(ctx, 'The full Score is yours. The house never knew you were there.', CANVAS_W / 2, y + 106, 15, CREAM, 'center');
-  for (let i = 0; i < ACT_ITINERARY.length; i++) {
-    sans(ctx, '\u2713 ' + (i + 1) + '  ' + ACT_ITINERARY[i].name, CANVAS_W / 2, y + 150 + i * 28, 14, CREAM, 'center');
+  // Left: the route map.
+  const mapX = x + 24;
+  const mapY = y + 64;
+  const mapW = 440;
+  const mapH = 460;
+  sans(ctx, 'THE ROUTE YOU TOOK THROUGH ' + game.level.name, mapX, y + 30, 13, GOLD, 'left', true);
+  sans(ctx, 'The full Score taken, out through the door. Every step, drawn.', mapX, y + 50, 12, CREAM);
+  // Mini map: walls and crates as a dark grid, floor as ink.
+  ctx.fillStyle = '#0d0a08';
+  ctx.fillRect(mapX, mapY, mapW, mapH);
+  ctx.strokeStyle = GOLD_DIM;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(mapX + 0.5, mapY + 0.5, mapW, mapH);
+  const mw = mapW / COLS;
+  const mh = mapH / ROWS;
+  for (let ty = 0; ty < ROWS; ty++) {
+    for (let tx = 0; tx < COLS; tx++) {
+      const t = game.level.grid[ty][tx];
+      if (t === '#') {
+        ctx.fillStyle = WALL;
+        ctx.fillRect(mapX + tx * mw, mapY + ty * mh, mw, mh);
+      } else if (t === 'C' || t === 'c') {
+        ctx.fillStyle = CRATE;
+        ctx.fillRect(mapX + tx * mw + 1, mapY + ty * mh + 1, mw - 2, mh - 2);
+      }
+    }
   }
-  sans(ctx, 'SCORE PAGES 5 / 5', CANVAS_W / 2, y + 320, 16, GOLD, 'center', true);
-  sans(ctx, 'FINAL SCORE ' + game.score + '   TIME ' + fmtTime(game.totalTime), CANVAS_W / 2, y + 352, 15, CREAM, 'center', true);
-  sans(ctx, 'STRIKES SURVIVING ' + game.strikes + ' / 3   HEAT ' + game.heat + '%   TIMES SPOTTED ' + game.spotted, CANVAS_W / 2, y + 382, 14, CREAM, 'center');
-  sans(ctx, 'Press Enter to play again', CANVAS_W / 2, y + 440, 15, CREAM, 'center', true);
+  // Guard end markers: small amber triangles where guards stood.
+  for (const g of game.guards) {
+    const gx = mapX + (g.x / TILE) * mw;
+    const gy = mapY + (g.y / TILE) * mh;
+    ctx.fillStyle = AMBER;
+    ctx.beginPath();
+    ctx.moveTo(gx, gy - 5);
+    ctx.lineTo(gx + 5, gy + 4);
+    ctx.lineTo(gx - 5, gy + 4);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // The route: dashed cyan line through the logged positions.
+  const route = game.routeLog || [];
+  if (route.length > 1) {
+    ctx.strokeStyle = CYAN;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    for (let i = 0; i < route.length; i++) {
+      const rx = mapX + (route[i].x / TILE) * mw;
+      const ry = mapY + (route[i].y / TILE) * mh;
+      if (i === 0) ctx.moveTo(rx, ry);
+      else ctx.lineTo(rx, ry);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Start and end dots.
+    const s0 = route[0];
+    const s1 = route[route.length - 1];
+    ctx.fillStyle = CYAN;
+    ctx.beginPath();
+    ctx.arc(mapX + (s0.x / TILE) * mw, mapY + (s0.y / TILE) * mh, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = GOLD;
+    ctx.beginPath();
+    ctx.arc(mapX + (s1.x / TILE) * mw, mapY + (s1.y / TILE) * mh, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  sans(ctx, 'your route', mapX, mapY + mapH + 20, 12, CYAN);
+  sans(ctx, 'where the guards stood at the end', mapX + 110, mapY + mapH + 20, 12, AMBER);
+  // Right: the debrief.
+  const rx = x + 500;
+  const rw = w - 524;
+  sans(ctx, 'ACT 5 DONE', rx, y + 30, 13, CREAM, 'left', true);
+  text(ctx, 'CURTAIN CALL', rx, y + 78, 40, GOLD, 'left', true);
+  // GHOST stamp when never spotted, tilted green.
+  const ghost = game.spotted === 0;
+  if (ghost) {
+    ctx.save();
+    ctx.translate(rx + 130, y + 150);
+    ctx.rotate(-0.12);
+    ctx.strokeStyle = '#4dd8a0';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(-130, -28, 260, 56);
+    ctx.strokeStyle = '#4dd8a0';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-124, -22, 248, 44);
+    sans(ctx, 'GHOST', 0, 10, 36, '#4dd8a0', 'center', true);
+    ctx.restore();
+    sans(ctx, 'Nobody will ever know you were there.', rx, y + 206, 14, CREAM, 'left', false, true);
+  } else {
+    sans(ctx, 'The house saw you ' + game.spotted + (game.spotted === 1 ? ' time' : ' times') + ', but the Score is yours.', rx, y + 150, 14, CREAM, 'left', false, true);
+  }
+  // Stats.
+  const stats = [
+    ['Time', fmtTime(game.totalTime)],
+    ['Times spotted', String(game.spotted)],
+    ['Close calls', String(game.closeCalls || 0)],
+    ['Coins thrown', String(game.coinsThrownTotal || 0)],
+    ['Pages', game.pages + ' / 5'],
+  ];
+  let sy = y + 240;
+  for (const [label, val] of stats) {
+    sans(ctx, label, rx, sy, 14, CREAM);
+    sans(ctx, val, rx + rw - 24, sy, 14, CREAM, 'right', true);
+    sy += 28;
+  }
+  // Gold checkmarks, only the ones actually earned.
+  const checks = [];
+  if (game.spotted === 0) checks.push('Never spotted');
+  if (game.pages >= 5) checks.push('Every page');
+  if (game.totalTime > 0 && game.totalTime < 75) checks.push('Under 75s');
+  sy += 8;
+  for (let i = 0; i < checks.length; i++) {
+    const cxp = rx + i * 150;
+    ctx.fillStyle = GOLD;
+    ctx.beginPath();
+    ctx.arc(cxp + 14, sy + 14, 14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#0d0a08';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(cxp + 7, sy + 14);
+    ctx.lineTo(cxp + 12, sy + 19);
+    ctx.lineTo(cxp + 21, sy + 8);
+    ctx.stroke();
+    sans(ctx, checks[i], cxp + 32, sy + 19, 12, CREAM);
+  }
+  // Buttons, visual only.
+  sy += 56;
+  const btns = ['NEXT ACT', 'REPLAY', 'CAMPAIGN'];
+  for (let i = 0; i < btns.length; i++) {
+    const bx = rx + i * 150;
+    const bw = 138;
+    ctx.fillStyle = i === 0 ? '#3a2c10' : '#171008';
+    ctx.fillRect(bx, sy, bw, 40);
+    ctx.strokeStyle = GOLD;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(bx + 0.5, sy + 0.5, bw, 40);
+    sans(ctx, btns[i], bx + bw / 2, sy + 26, 14, i === 0 ? '#ffd24a' : CREAM, 'center', true);
+  }
+  sans(ctx, 'Press Enter to play again', rx, sy + 72, 14, CREAM);
 }
 
 function drawGameOver(game, ctx) {
@@ -995,6 +1379,33 @@ function drawMessage(game, ctx) {
   ctx.globalAlpha = 1;
 }
 
+// SPOTTED headline: big red drama when a guard is chasing. The named
+// guard is the one in chase; the sub-line tells the player what to do.
+function drawSpottedHeadline(game, ctx) {
+  let chaser = null;
+  for (const g of game.guards) {
+    if (g.state === 'chase') { chaser = g; break; }
+  }
+  if (!chaser) return;
+  // A red wash over the whole frame for drama.
+  ctx.fillStyle = 'rgba(139, 26, 26, 0.10)';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  const name = (chaser.name || 'STAGEHAND').toUpperCase();
+  const cx = CANVAS_W / 2;
+  const y = 108;
+  ctx.save();
+  if (typeof ctx.letterSpacing !== 'undefined') ctx.letterSpacing = '2px';
+  sans(ctx, 'SPOTTED BY ' + name, cx, y, 30, '#ff5a5a', 'center', true);
+  ctx.restore();
+  ctx.strokeStyle = '#ff5a5a';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx - 260, y + 12);
+  ctx.lineTo(cx + 260, y + 12);
+  ctx.stroke();
+  sans(ctx, 'Run. Break their line of sight. Hide.', cx, y + 34, 14, '#f2e6c8', 'center', false, true);
+}
+
 // Main draw dispatch. Screens stack; the world is drawn under overlays.
 export function draw(game, ctx) {
   ctx.fillStyle = DARK;
@@ -1009,6 +1420,8 @@ export function draw(game, ctx) {
   drawCampaignPanel(game, ctx);
   drawRightPanel(game, ctx);
   drawWorld(game, ctx, game.view);
+  drawCallouts(game, ctx, game.view);
+  drawSpottedHeadline(game, ctx);
   drawMessage(game, ctx);
   if (screen === 'intermission') drawIntermission(game, ctx);
   else if (screen === 'strikeLost') drawStrikeLost(game, ctx);
