@@ -26,23 +26,69 @@ const CRIMSON_BRIGHT = '#a02020';
 const DARK = '#0d0a08';
 const PANEL_BG = '#14100c';
 
-const CONE_COLORS = {
-  amber: 'rgba(232, 160, 32, 0.28)',
-  cyan: 'rgba(64, 160, 192, 0.28)',
-  magenta: 'rgba(192, 64, 160, 0.28)',
+// Four semantic channels only. RED danger, GOLD goal and chrome,
+// CYAN you and your safe state, VIOLET cues and stage machinery.
+// Neutral gray is architecture and inert props.
+const RED = '#ff3b4e';
+const RED_RGB = '255, 59, 78';
+const CYAN = '#4dd8e6';
+const CYAN_RGB = '77, 216, 230';
+const VIOLET = '#9a7ff0';
+const VIOLET_RGB = '154, 127, 240';
+const AMBER = '#e8a020';
+const CHARCOAL = '#2b2733';
+const LIT_FLOOR = '#241e2b';
+const DARK_FLOOR = '#12101a';
+const WALL = '#2a2630';
+const CRATE = '#3a3442';
+const LOWCOVER = '#2e2a33';
+
+// Cone state, one red family. State is intensity, never hue.
+const CONE_STATE = {
+  patrol: { fill: 0.14, edge: 0.45 },
+  suspicious: { fill: 0.22, edge: 0.9 },
+  chase: { fill: 0.30, edge: 1 },
 };
-const CONE_EDGE = {
-  amber: 'rgba(232, 160, 32, 0.55)',
-  cyan: 'rgba(64, 160, 192, 0.55)',
-  magenta: 'rgba(192, 64, 160, 0.55)',
-};
-const GEL_TINT = {
-  amber: 'rgba(232, 160, 32, 0.06)',
-  green: 'rgba(80, 180, 90, 0.08)',
-  warm: 'rgba(255, 190, 90, 0.09)',
-  storm: 'rgba(90, 120, 220, 0.09)',
-  gold: 'rgba(212, 175, 55, 0.07)',
-};
+
+// Render-only display state. The sim never sees these.
+// Suspicion history for the DETECTION decay ghost (value ~1s ago).
+let susHistory = [];
+let susHistoryLevel = -1;
+// Guard investigate tags: WeakMap keyed by guard object, so a level
+// reload drops the old tags on its own.
+const guardTags = new WeakMap();
+
+function worstSuspicionLocal(game) {
+  let w = 0;
+  for (const g of game.guards) w = Math.max(w, g.suspicion);
+  return w;
+}
+
+function eyesOnPlayer(game) {
+  let n = 0;
+  for (const g of game.guards) {
+    if (g.seesPlayer) n++;
+  }
+  return n;
+}
+
+// DETECTION bucket from the worst guard suspicion only, so the hero
+// word, the meter, the sub-line and the badge always agree. The house
+// number is shown on its own line under the badge.
+function detectionState(game) {
+  const worst = worstSuspicionLocal(game);
+  let chase = false;
+  for (const g of game.guards) if (g.state === 'chase') chase = true;
+  if (chase || worst >= 70) return { word: 'ALARM', color: RED, worst };
+  if (worst >= 30 || eyesOnPlayer(game) > 0) return { word: 'SUSPICIOUS', color: AMBER, worst };
+  return { word: 'QUIET', color: CYAN, worst };
+}
+
+function visibilityWord(lux) {
+  if (lux >= 0.5) return 'LIT';
+  if (lux >= 0.25) return 'DIM';
+  return 'DARK';
+}
 
 // The view maps world pixels (768 by 512) into the playfield rect.
 export function createView() {
@@ -101,18 +147,88 @@ function fmtTime(sec) {
   return m + ':' + (s < 10 ? '0' : '') + s;
 }
 
-function drawCone(ctx, view, x, y, dir, halfAngle, range, color) {
+// The threat layer: all cone fills go into one offscreen canvas with
+// 'lighten' so overlaps never stack brightness, then it is composited
+// once. Outlines are stroked on the main canvas after, crisp 1px.
+let threatCanvas = null;
+function getThreatCanvas() {
+  if (!threatCanvas) {
+    threatCanvas = document.createElement('canvas');
+    threatCanvas.width = CANVAS_W;
+    threatCanvas.height = CANVAS_H;
+  }
+  return threatCanvas;
+}
+
+function conePath(ctx, view, x, y, dir, halfAngle, range) {
   const p = view.toScreen(x, y);
   const r = range * view.scale;
   ctx.beginPath();
   ctx.moveTo(p.x, p.y);
   ctx.arc(p.x, p.y, r, dir - halfAngle, dir + halfAngle);
   ctx.closePath();
-  ctx.fillStyle = CONE_COLORS[color] || CONE_COLORS.amber;
-  ctx.fill();
-  ctx.strokeStyle = CONE_EDGE[color] || CONE_EDGE.amber;
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  return p;
+}
+
+function coneStateOf(guard) {
+  if (guard.state === 'chase') return CONE_STATE.chase;
+  if (guard.state === 'investigate' || guard.state === 'suspicious') return CONE_STATE.suspicious;
+  return CONE_STATE.patrol;
+}
+
+// Draw every cone: fills into the threat layer, outlines on top.
+function drawConeLayer(game, ctx, view) {
+  const off = getThreatCanvas();
+  const octx = off.getContext('2d');
+  octx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  octx.globalCompositeOperation = 'lighten';
+  const cones = [];
+  // Guard cones.
+  for (const g of game.guards) {
+    const range = g.coneTiles * TILE * coneRangeFactor(game);
+    const half = g.state === 'chase' ? (50 * Math.PI) / 180 : (35 * Math.PI) / 180;
+    cones.push({ x: g.x, y: g.y, dir: g.dir, half, range, st: coneStateOf(g), chase: g.state === 'chase' });
+  }
+  // Camera cones: danger too, same red family, patrol intensity.
+  for (const cam of game.cameras) {
+    if (game.cueFx.blackout <= 0) {
+      cones.push({ x: cam.x, y: cam.y, dir: cam.dir, half: (25 * Math.PI) / 180, range: cam.range, st: CONE_STATE.patrol, chase: false });
+    }
+  }
+  for (const c of cones) {
+    // Hot zone: the first 2 tiles, brighter red inside the fill layer.
+    conePath(octx, view, c.x, c.y, c.dir, c.half, Math.min(c.range, 2 * TILE));
+    octx.fillStyle = 'rgba(' + RED_RGB + ', 0.25)';
+    octx.fill();
+    conePath(octx, view, c.x, c.y, c.dir, c.half, c.range);
+    octx.fillStyle = 'rgba(' + RED_RGB + ', ' + c.st.fill + ')';
+    octx.fill();
+  }
+  octx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(off, 0, 0);
+  // Crisp 1px outlines, then a hatch on alarmed cones.
+  for (const c of cones) {
+    conePath(ctx, view, c.x, c.y, c.dir, c.half, c.range);
+    ctx.strokeStyle = 'rgba(' + RED_RGB + ', ' + c.st.edge + ')';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    if (c.chase) {
+      ctx.save();
+      conePath(ctx, view, c.x, c.y, c.dir, c.half, c.range);
+      ctx.clip();
+      const p = view.toScreen(c.x, c.y);
+      const r = c.range * view.scale;
+      ctx.strokeStyle = 'rgba(' + RED_RGB + ', 0.35)';
+      ctx.lineWidth = 1;
+      for (let i = -6; i <= 6; i++) {
+        ctx.beginPath();
+        ctx.moveTo(p.x - r + i * 18, p.y - r);
+        ctx.lineTo(p.x + r + i * 18, p.y + r);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
 }
 
 // The top bar: title, act and scene, score and time.
@@ -196,7 +312,8 @@ function drawCampaignPanel(game, ctx) {
   bar(ctx, x + 78, divY + 59, 110, 9, game.heat / 100, game.heat > 70 ? '#c04030' : GOLD);
 }
 
-// The right panel: Show Clock, Cue Board, suspicion, status, legend.
+// The right panel: Show Clock, Cue Board, DETECTION, SOUND, the
+// campaign tallies, the one-line color key, and the controls.
 function drawRightPanel(game, ctx) {
   const x = PANEL_X;
   const w = PANEL_W;
@@ -214,47 +331,100 @@ function drawRightPanel(game, ctx) {
   for (let i = 0; i < CUES.length; i++) {
     const cue = CUES[i];
     const active = game.cueFx[cue.id] > 0;
-    sans(ctx, cue.key + ' ' + cue.name + (active ? '  *' : ''), x, y + 24 + i * 16, 12, active ? '#ffd24a' : CREAM, 'left', active);
+    sans(ctx, cue.key + ' ' + cue.name + (active ? '  *' : ''), x, y + 24 + i * 16, 12, active ? VIOLET : CREAM, 'left', active);
   }
   y += 56 + 3 * 16;
-  sans(ctx, 'HOUSE SUSPICION ' + game.suspicion + '%', x, y + 6, 13, GOLD, 'left', true);
-  bar(ctx, x, y + 14, w - 16, 10, game.suspicion / 100, game.suspicion > 70 ? '#c04030' : GOLD);
-  y += 40;
-  sans(ctx, 'STATUS: \u2022 ' + game.status, x, y + 6, 13, game.status === 'UNSEEN' ? CREAM : '#ff9a7a', 'left', true);
-  sans(ctx, 'VISIBILITY (lux)', x, y + 26, 12, GOLD, 'left', true);
-  bar(ctx, x, y + 32, w - 16, 8, game.lux, '#7fb8c9');
-  sans(ctx, 'NOISE vs APPLAUSE MASK', x, y + 52, 12, GOLD, 'left', true);
-  bar(ctx, x, y + 58, w - 16, 8, game.player.noise, '#c9a227');
-  if (game.cueFx.thunder > 0) {
-    sans(ctx, 'applause masks all noise', x, y + 74, 11, '#ffd24a');
+  // DETECTION: the recovery loop, legible at a glance. Hero word and
+  // meter track the worst guard suspicion (it rises when seen and
+  // decays when hidden); the house number sits under it.
+  if (susHistoryLevel !== game.levelIndex) {
+    susHistory = [];
+    susHistoryLevel = game.levelIndex;
   }
-  y += 84;
+  const det = detectionState(game);
+  const worst = det.worst;
+  susHistory.push({ t: game.time, v: worst });
+  while (susHistory.length > 2 && susHistory[0].t < game.time - 1.5) susHistory.shift();
+  let ghostV = null;
+  for (let i = susHistory.length - 1; i >= 0; i--) {
+    if (game.time - susHistory[i].t >= 0.9) { ghostV = susHistory[i].v; break; }
+  }
+  const eyes = eyesOnPlayer(game);
+  sans(ctx, 'DETECTION', x, y + 6, 13, GOLD, 'left', true);
+  ctx.save();
+  if (typeof ctx.letterSpacing !== 'undefined') ctx.letterSpacing = '6px';
+  sans(ctx, det.word, x, y + 40, 28, det.color, 'left', true);
+  ctx.restore();
+  // 10-tick alarm meter.
+  const meterX = x;
+  const meterW = w - 16;
+  const meterY = y + 52;
+  const tickW = (meterW - 27) / 10;
+  for (let i = 0; i < 10; i++) {
+    const tx = meterX + i * (tickW + 3);
+    const filled = worst >= (i + 1) * 10;
+    ctx.fillStyle = filled ? det.color : '#2a2118';
+    ctx.fillRect(tx, meterY, tickW, 10);
+    ctx.strokeStyle = GOLD_DIM;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(tx + 0.5, meterY + 0.5, tickW, 10);
+  }
+  // Decay ghost: where the meter was about a second ago.
+  if (ghostV !== null && Math.abs(ghostV - worst) >= 5) {
+    const gx = meterX + (ghostV / 100) * meterW;
+    ctx.strokeStyle = 'rgba(232, 220, 192, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(gx, meterY - 2);
+    ctx.lineTo(gx, meterY + 12);
+    ctx.stroke();
+  }
+  let subLine;
+  if (eyes > 0) {
+    subLine = 'rising \u00B7 ' + eyes + (eyes === 1 ? ' eye' : ' eyes') + ' on you';
+  } else if (worst > 0) {
+    subLine = 'falling \u00B7 clear in ' + Math.max(1, Math.ceil(worst / 12)) + 's';
+  } else {
+    subLine = 'clear \u00B7 no eyes on you';
+  }
+  sans(ctx, subLine, x, y + 76, 12, eyes > 0 ? '#ff9a7a' : CREAM);
+  // HIDDEN / SEEN badge plus the house number.
+  const badge = eyes > 0 ? 'SEEN' : 'HIDDEN';
+  const badgeColor = eyes > 0 ? RED : CYAN;
+  const badgeText = eyes > 0 ? 'SEEN \u00B7 ' + eyes + ' eye' + (eyes === 1 ? '' : 's') : 'HIDDEN';
+  ctx.font = 'bold 12px Arial, sans-serif';
+  const bw = ctx.measureText(badgeText).width + 16;
+  ctx.fillStyle = badgeColor;
+  ctx.beginPath();
+  ctx.arc(x + 8, y + 92, 8, Math.PI / 2, Math.PI * 1.5);
+  ctx.arc(x + bw - 8, y + 92, 8, -Math.PI / 2, Math.PI / 2);
+  ctx.fill();
+  ctx.fillRect(x + 8, y + 84, bw - 16, 16);
+  sans(ctx, badgeText, x + bw / 2, y + 96, 12, '#0d0a08', 'center', true);
+  sans(ctx, 'HOUSE ' + game.suspicion + '%', x + bw + 12, y + 96, 12, CREAM, 'left', true);
+  y += 112;
+  // SOUND: one card, two bars on one axis. Noise is cyan/white,
+  // the applause mask is gold. Gold longer than white means masked.
+  sans(ctx, 'SOUND', x, y + 6, 13, GOLD, 'left', true);
+  const mask = game.cueFx.thunder > 0 ? 1 : 0;
+  sans(ctx, 'NOISE', x, y + 26, 11, CREAM, 'left', true);
+  bar(ctx, x + 52, y + 18, w - 68, 8, game.player.noise, CYAN);
+  sans(ctx, 'MASK', x, y + 44, 11, CREAM, 'left', true);
+  bar(ctx, x + 52, y + 36, w - 68, 8, mask, GOLD);
+  if (mask > game.player.noise) {
+    sans(ctx, 'MASKED', x + w - 16, y + 26, 11, GOLD, 'right', true);
+  }
+  sans(ctx, 'VISIBILITY: ' + visibilityWord(game.lux), x, y + 62, 11, game.lux >= 0.5 ? '#ff9a7a' : CREAM, 'left', true);
+  y += 76;
   sans(ctx, 'Spotted: ' + game.spotted + ' times', x, y + 6, 12, CREAM);
   sans(ctx, 'Coins left: ' + game.coins, x, y + 22, 12, CREAM);
   sans(ctx, 'Goal: steal the score page', x, y + 38, 12, CREAM, 'left', true);
   y += 56;
-  sans(ctx, 'LEGEND', x, y + 6, 13, GOLD, 'left', true);
-  const legend = [
-    ['#3a4a6a', 'guard + cone: stagehand, watch the cone'],
-    ['#c9a227', 'camera: usher lantern, sweeps a cone'],
-    ['#5a4028', 'tall crate: blocks sight and movement'],
-    ['#4a2a2a', 'low cover: hide here while sneaking'],
-    ['#e8c860', 'lamp light: bright, seen faster'],
-    ['#1a2030', 'deep shadow: dark, hard to be seen'],
-    ['#c04050', 'laser: rigging line, pulses on and off'],
-    ['#c9a227', 'vent: press E to crawl through'],
-    ['#f0e6cc', 'objective: the score page to steal'],
-    ['#a02020', 'exit: stage door, opens after the steal'],
-  ];
-  for (let i = 0; i < legend.length; i++) {
-    const ly = y + 22 + i * 15;
-    ctx.fillStyle = legend[i][0];
-    ctx.fillRect(x, ly - 9, 10, 10);
-    ctx.strokeStyle = GOLD_DIM;
-    ctx.strokeRect(x + 0.5, ly - 9.5, 10, 10);
-    sans(ctx, legend[i][1], x + 16, ly, 11, MUTED);
-  }
-  y += 22 + legend.length * 15 + 10;
+  // The color key replaces the whole legend. Two short lines: the
+  // full key does not fit the panel on one line at a readable size.
+  sans(ctx, 'RED = SEEN \u00B7 GOLD = GOAL', x, y + 6, 11, CREAM, 'left', true);
+  sans(ctx, 'CYAN = YOU \u00B7 VIOLET = CUE', x, y + 22, 11, CREAM, 'left', true);
+  y += 38;
   sans(ctx, 'CONTROLS', x, y + 6, 13, GOLD, 'left', true);
   const controls = [
     'WASD / arrows: move',
@@ -275,8 +445,10 @@ function drawWorld(game, ctx, view) {
   const s = view.scale;
   const ox = view.ox;
   const oy = view.oy;
-  // Floor.
-  ctx.fillStyle = '#171310';
+  // Floor: light is luminance, not hue. A floor tile near a lamp is
+  // lit (#241E2B) with a subtle hatch; far from lamps it is dark
+  // (#12101A). Deep shadow is darkest. Architecture is neutral gray.
+  ctx.fillStyle = DARK_FLOOR;
   ctx.fillRect(ox, oy, COLS * TILE * s, ROWS * TILE * s);
   // Floor grid and tiles.
   for (let ty = 0; ty < ROWS; ty++) {
@@ -286,32 +458,92 @@ function drawWorld(game, ctx, view) {
       const py = oy + ty * TILE * s;
       const w = TILE * s;
       if (t === '#') {
-        ctx.fillStyle = '#33291f';
+        ctx.fillStyle = WALL;
         ctx.fillRect(px, py, w, w);
-        ctx.fillStyle = '#c9a227';
+        ctx.fillStyle = GOLD;
         ctx.fillRect(px, py, w, 2);
       } else if (t === 'C') {
-        ctx.fillStyle = '#5a4028';
+        ctx.fillStyle = CRATE;
         ctx.fillRect(px + 2, py + 2, w - 4, w - 4);
-        ctx.fillStyle = '#c9a227';
+        ctx.fillStyle = GOLD_DIM;
         ctx.fillRect(px + 2, py + 2, w - 4, 3);
-        ctx.strokeStyle = '#2a1c10';
+        ctx.strokeStyle = '#1a1620';
         ctx.strokeRect(px + 2.5, py + 2.5, w - 5, w - 5);
       } else if (t === 'c') {
-        ctx.fillStyle = '#4a2a2a';
+        ctx.fillStyle = LOWCOVER;
         ctx.fillRect(px + 3, py + 3, w - 6, w - 6);
-        ctx.fillStyle = '#7a4a3a';
+        ctx.fillStyle = '#5a5266';
         ctx.fillRect(px + 3, py + 3, w - 6, 3);
       } else if (t === 'D') {
-        ctx.fillStyle = '#141a26';
+        ctx.fillStyle = DARK_FLOOR;
         ctx.fillRect(px, py, w, w);
       } else {
-        ctx.fillStyle = '#1b1611';
+        // '.' floor and 'L' lamp tiles: lit near a lamp, dark away.
+        let lit = t === 'L';
+        if (!lit) {
+          for (const lamp of game.lamps) {
+            const dx = tx - lamp.x;
+            const dy = ty - lamp.y;
+            if (dx * dx + dy * dy < 9) { lit = true; break; }
+          }
+        }
+        ctx.fillStyle = lit ? LIT_FLOOR : DARK_FLOOR;
         ctx.fillRect(px, py, w, w);
+        if (lit) {
+          ctx.strokeStyle = 'rgba(232, 220, 192, 0.06)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(px + 4, py + w - 4);
+          ctx.lineTo(px + w - 4, py + 4);
+          ctx.stroke();
+        }
       }
-      ctx.strokeStyle = 'rgba(201, 162, 39, 0.08)';
+      ctx.strokeStyle = 'rgba(232, 220, 192, 0.05)';
       ctx.lineWidth = 1;
       ctx.strokeRect(px + 0.5, py + 0.5, w, w);
+    }
+  }
+  // Dust motes drifting in the beams, under the entities.
+  ctx.fillStyle = 'rgba(232, 200, 120, 0.35)';
+  for (let i = 0; i < 24; i++) {
+    const mx = ((i * 97 + game.time * 6) % (COLS * TILE));
+    const my = ((i * 61 + game.time * 3) % (ROWS * TILE));
+    const p = view.toScreen(mx, my);
+    ctx.fillRect(p.x, p.y, 1.5, 1.5);
+  }
+  // A very subtle warm wash, the same for every act: light is
+  // luminance here, not hue. It sits under the entities so the
+  // cones, guards and player stay crisp on top of it.
+  ctx.fillStyle = 'rgba(201, 162, 39, 0.03)';
+  ctx.fillRect(ox, oy, COLS * TILE * s, ROWS * TILE * s);
+  // Fog: a violet wash plus drifting blobs, under the entities.
+  if (level.fog || game.cueFx.fog > 0) {
+    ctx.fillStyle = 'rgba(' + VIOLET_RGB + ', 0.10)';
+    ctx.fillRect(ox, oy, COLS * TILE * s, ROWS * TILE * s);
+    ctx.fillStyle = 'rgba(' + VIOLET_RGB + ', 0.08)';
+    for (let i = 0; i < 6; i++) {
+      const fx = ox + ((i * 173 + game.time * 12) % (COLS * TILE * s));
+      const fy = oy + ((i * 131 + game.time * 5) % (ROWS * TILE * s));
+      ctx.beginPath();
+      ctx.ellipse(fx, fy, 90, 40, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  // Blackout: the sheet drops to lantern pinpricks, under the entities
+  // so the player's cyan ring stays findable in the dark.
+  if (game.cueFx.blackout > 0) {
+    ctx.fillStyle = 'rgba(5, 4, 3, 0.72)';
+    ctx.fillRect(ox, oy, COLS * TILE * s, ROWS * TILE * s);
+    for (const lamp of game.lamps) {
+      const c = tileCenter(lamp.x, lamp.y);
+      const p = view.toScreen(c.x, c.y);
+      const grad = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, 60);
+      grad.addColorStop(0, 'rgba(255, 180, 80, 0.5)');
+      grad.addColorStop(1, 'rgba(255, 180, 80, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 60, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
   // Rope lines across the top of the stage.
@@ -376,17 +608,31 @@ function drawWorld(game, ctx, view) {
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
   }
-  // Objective page.
+  // Objective: a gold pulsing diamond with a vertical light shaft.
+  // The floating "THE SCORE" label is drawn in the label pass.
   if (!game.objectiveTaken) {
     const o = tileCenter(level.objective.x, level.objective.y);
     const p = view.toScreen(o.x, o.y);
     const pulse = 1 + 0.12 * Math.sin(game.time * 3);
-    ctx.fillStyle = '#f0e6cc';
+    const shaftW = 14 * s + 6;
+    const shaftGrad = ctx.createLinearGradient(0, p.y - 70, 0, p.y);
+    shaftGrad.addColorStop(0, 'rgba(201, 162, 39, 0)');
+    shaftGrad.addColorStop(1, 'rgba(201, 162, 39, 0.28)');
+    ctx.fillStyle = shaftGrad;
+    ctx.fillRect(p.x - shaftW / 2, p.y - 70, shaftW, 70);
+    const r = 11 * pulse;
+    ctx.fillStyle = GOLD;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 10 * pulse, 0, Math.PI * 2);
+    ctx.moveTo(p.x, p.y - r);
+    ctx.lineTo(p.x + r, p.y);
+    ctx.lineTo(p.x, p.y + r);
+    ctx.lineTo(p.x - r, p.y);
+    ctx.closePath();
     ctx.fill();
-    ctx.strokeStyle = '#8a7a3a';
+    ctx.strokeStyle = '#f0e6cc';
     ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.strokeStyle = '#8a7a3a';
     for (let i = -1; i <= 1; i++) {
       ctx.beginPath();
       ctx.moveTo(p.x - 5, p.y + i * 4);
@@ -394,16 +640,36 @@ function drawWorld(game, ctx, view) {
       ctx.stroke();
     }
   }
-  // Exit.
+  // Exit: a gold door arch. Chevrons point out, animated.
   const ex = tileCenter(level.exit.x, level.exit.y);
   const ep = view.toScreen(ex.x, ex.y);
   const open = game.objectiveTaken;
-  ctx.strokeStyle = open ? '#7ac74a' : GOLD;
+  ctx.strokeStyle = open ? '#ffd24a' : GOLD;
   ctx.lineWidth = 2;
   const er = 12 * s + 4;
-  ctx.strokeRect(ep.x - er, ep.y - er, er * 2, er * 2);
-  ctx.fillStyle = open ? '#7ac74a' : GOLD;
-  sans(ctx, 'EXIT', ep.x, ep.y + 4, 10, open ? '#7ac74a' : GOLD, 'center', true);
+  ctx.beginPath();
+  ctx.moveTo(ep.x - er, ep.y + er);
+  ctx.lineTo(ep.x - er, ep.y - er + 6);
+  ctx.arc(ep.x, ep.y - er + 6, er, Math.PI, 0);
+  ctx.lineTo(ep.x + er, ep.y + er);
+  ctx.closePath();
+  ctx.stroke();
+  if (open) {
+    ctx.fillStyle = 'rgba(201, 162, 39, 0.15)';
+    ctx.fill();
+  }
+  const chevPhase = (game.time * 1.5) % 1;
+  for (let i = 0; i < 2; i++) {
+    const frac = (chevPhase + i * 0.5) % 1;
+    const cx = ep.x + er + 4 + frac * 14;
+    ctx.strokeStyle = 'rgba(201, 162, 39, ' + (open ? 1 - frac : 0.5) + ')';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, ep.y - 5);
+    ctx.lineTo(cx + 5, ep.y);
+    ctx.lineTo(cx, ep.y + 5);
+    ctx.stroke();
+  }
   // Thrown coins.
   for (const c of game.coinsThrown) {
     const p = view.toScreen(c.x, c.y);
@@ -419,11 +685,10 @@ function drawWorld(game, ctx, view) {
     ctx.arc(p.x, p.y, 12 + 4 * Math.sin(game.time * 6), 0, Math.PI * 2);
     ctx.stroke();
   }
-  // Camera cones, then cameras.
+  // All cones in one red family, via the threat layer.
+  drawConeLayer(game, ctx, view);
+  // Cameras: gold bodies, red meter when they are filling.
   for (const cam of game.cameras) {
-    if (game.cueFx.blackout <= 0) {
-      drawCone(ctx, view, cam.x, cam.y, cam.dir, (25 * Math.PI) / 180, cam.range, cam.color);
-    }
     const p = view.toScreen(cam.x, cam.y);
     ctx.fillStyle = '#c9a227';
     ctx.beginPath();
@@ -438,92 +703,154 @@ function drawWorld(game, ctx, view) {
       ctx.fillRect(p.x - 10, p.y - 16, 20 * (cam.meter / 100), 3);
     }
   }
-  // Guard cones, then guards.
-  for (const g of game.guards) {
-    const range = g.coneTiles * TILE * coneRangeFactor(game);
-    const half = g.state === 'chase' ? (50 * Math.PI) / 180 : (35 * Math.PI) / 180;
-    drawCone(ctx, view, g.x, g.y, g.dir, half, range, g.color);
-  }
+  // Guards: charcoal bodies with a red epaulette, state pip above.
   for (const g of game.guards) {
     const p = view.toScreen(g.x, g.y);
-    ctx.fillStyle = '#3a4a6a';
+    ctx.fillStyle = CHARCOAL;
     ctx.beginPath();
     ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#c9a227';
+    ctx.strokeStyle = RED;
     ctx.lineWidth = 1.5;
     ctx.stroke();
-    ctx.fillStyle = '#e8c860';
+    // Red epaulette on the facing side.
+    ctx.fillStyle = RED;
     ctx.beginPath();
-    ctx.arc(p.x + Math.cos(g.dir) * 5, p.y + Math.sin(g.dir) * 5, 3, 0, Math.PI * 2);
+    ctx.arc(p.x + Math.cos(g.dir) * 7, p.y + Math.sin(g.dir) * 7, 3, 0, Math.PI * 2);
     ctx.fill();
-    if (g.suspicion > 0) {
-      const mark = g.state === 'chase' ? '!' : '?';
-      sans(ctx, mark, p.x, p.y - 16, 14, g.state === 'chase' ? '#ff6a4a' : '#ffd24a', 'center', true);
+    // State pip: "?" amber for investigate/suspicious, "!" red for chase.
+    let pip = null;
+    let pipColor = AMBER;
+    if (g.state === 'chase') { pip = '!'; pipColor = RED; }
+    else if (g.state === 'investigate' || g.state === 'suspicious') { pip = '?'; pipColor = AMBER; }
+    if (pip) {
+      sans(ctx, pip, p.x, p.y - 16, 14, pipColor, 'center', true);
+    }
+    // "WHAT WAS THAT?" tag on the turn to investigate: rises and fades.
+    let tag = guardTags.get(g);
+    if (!tag) { tag = { prev: g.state, start: -1 }; guardTags.set(g, tag); }
+    if (g.state === 'investigate' && tag.prev !== 'investigate') tag.start = game.time;
+    tag.prev = g.state;
+    if (tag.start >= 0) {
+      const age = game.time - tag.start;
+      if (age >= 0 && age < 0.9) {
+        ctx.globalAlpha = 1 - age / 0.9;
+        sans(ctx, '?  WHAT WAS THAT?', p.x, p.y - 30 - (age / 0.9) * 12, 11, AMBER, 'center', true);
+        ctx.globalAlpha = 1;
+      }
     }
   }
-  // The player.
+  // The player: always on top of the cones, never under the red wash.
   const pp = view.toScreen(game.player.x, game.player.y);
+  // Soft drop shadow and a 12px ghost-light halo.
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+  ctx.beginPath();
+  ctx.ellipse(pp.x + 2, pp.y + 4, 11, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  const halo = ctx.createRadialGradient(pp.x, pp.y, 2, pp.x, pp.y, 21);
+  halo.addColorStop(0, 'rgba(' + CYAN_RGB + ', 0.28)');
+  halo.addColorStop(1, 'rgba(' + CYAN_RGB + ', 0)');
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(pp.x, pp.y, 21, 0, Math.PI * 2);
+  ctx.fill();
+  // Body with a 1px dark outline so it separates from the red wash.
   ctx.fillStyle = game.player.hidden ? 'rgba(232, 220, 192, 0.55)' : '#f0e6cc';
   ctx.beginPath();
   ctx.arc(pp.x, pp.y, 9, 0, Math.PI * 2);
   ctx.fill();
-  ctx.strokeStyle = '#8b1a1a';
+  ctx.strokeStyle = '#0d0a08';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  // Persistent 2px cyan ring and a directional facing notch.
+  ctx.strokeStyle = CYAN;
   ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.strokeStyle = '#8b1a1a';
   ctx.beginPath();
-  ctx.moveTo(pp.x, pp.y);
-  ctx.lineTo(pp.x + Math.cos(game.player.dir) * 13, pp.y + Math.sin(game.player.dir) * 13);
+  ctx.arc(pp.x, pp.y, 12, 0, Math.PI * 2);
   ctx.stroke();
-  if (game.player.hidden) {
-    ctx.strokeStyle = 'rgba(232, 220, 192, 0.6)';
-    ctx.setLineDash([4, 4]);
+  const fx = pp.x + Math.cos(game.player.dir) * 12;
+  const fy = pp.y + Math.sin(game.player.dir) * 12;
+  ctx.fillStyle = CYAN;
+  ctx.beginPath();
+  ctx.moveTo(fx + Math.cos(game.player.dir) * 6, fy + Math.sin(game.player.dir) * 6);
+  ctx.lineTo(fx + Math.cos(game.player.dir + 2.4) * 5, fy + Math.sin(game.player.dir + 2.4) * 5);
+  ctx.lineTo(fx + Math.cos(game.player.dir - 2.4) * 5, fy + Math.sin(game.player.dir - 2.4) * 5);
+  ctx.closePath();
+  ctx.fill();
+  // Compass chevron on the ring, pointing at the current objective.
+  const target = game.objectiveTaken
+    ? tileCenter(level.exit.x, level.exit.y)
+    : tileCenter(level.objective.x, level.objective.y);
+  const tang = Math.atan2(target.y - game.player.y, target.x - game.player.x);
+  const cxp = pp.x + Math.cos(tang) * 18;
+  const cyp = pp.y + Math.sin(tang) * 18;
+  ctx.fillStyle = GOLD;
+  ctx.beginPath();
+  ctx.moveTo(cxp + Math.cos(tang) * 6, cyp + Math.sin(tang) * 6);
+  ctx.lineTo(cxp + Math.cos(tang + 2.5) * 5, cyp + Math.sin(tang + 2.5) * 5);
+  ctx.lineTo(cxp + Math.cos(tang - 2.5) * 5, cyp + Math.sin(tang - 2.5) * 5);
+  ctx.closePath();
+  ctx.fill();
+  // Carrying the score: a small gold pip rides on the player.
+  if (game.objectiveTaken) {
+    ctx.fillStyle = GOLD;
     ctx.beginPath();
-    ctx.arc(pp.x, pp.y, 14, 0, Math.PI * 2);
+    ctx.moveTo(pp.x, pp.y - 20);
+    ctx.lineTo(pp.x + 4, pp.y - 16);
+    ctx.lineTo(pp.x, pp.y - 12);
+    ctx.lineTo(pp.x - 4, pp.y - 16);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // HIDDEN / SEEN pill above the player.
+  const pEyes = eyesOnPlayer(game);
+  const pBadge = pEyes > 0 ? 'SEEN \u00B7 ' + pEyes : 'HIDDEN';
+  const pBadgeColor = pEyes > 0 ? RED : CYAN;
+  ctx.font = 'bold 10px Arial, sans-serif';
+  const pbw = ctx.measureText(pBadge).width + 12;
+  const pby = pp.y - 30;
+  ctx.fillStyle = pBadgeColor;
+  ctx.beginPath();
+  ctx.arc(pp.x - pbw / 2 + 6, pby, 6, Math.PI / 2, Math.PI * 1.5);
+  ctx.arc(pp.x + pbw / 2 - 6, pby, 6, -Math.PI / 2, Math.PI / 2);
+  ctx.fill();
+  ctx.fillRect(pp.x - pbw / 2 + 6, pby - 6, pbw - 12, 12);
+  sans(ctx, pBadge, pp.x, pby + 3.5, 10, '#0d0a08', 'center', true);
+  // "YOU" tag on Act 1 only, while the player is still near the spawn.
+  if (game.levelIndex === 0) {
+    const spawn = tileCenter(2, 13);
+    if (Math.hypot(game.player.x - spawn.x, game.player.y - spawn.y) < 1.5 * TILE) {
+      sans(ctx, 'YOU', pp.x, pp.y - 44, 11, CYAN, 'center', true);
+    }
+  }
+  // Noise ring: how far the player's sound travels right now.
+  if (game.player.noise > 0.15) {
+    const nr = 220 * game.player.noise * view.scale * (0.92 + 0.08 * Math.sin(game.time * 6));
+    ctx.strokeStyle = 'rgba(232, 220, 192, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(pp.x, pp.y, nr, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.setLineDash([]);
   }
-  // Dust motes drifting in the beams.
-  ctx.fillStyle = 'rgba(232, 200, 120, 0.35)';
-  for (let i = 0; i < 24; i++) {
-    const mx = ((i * 97 + game.time * 6) % (COLS * TILE));
-    const my = ((i * 61 + game.time * 3) % (ROWS * TILE));
-    const p = view.toScreen(mx, my);
-    ctx.fillRect(p.x, p.y, 1.5, 1.5);
+  // Floating diegetic labels, drawn last so they stay crisp on top.
+  if (!game.objectiveTaken) {
+    const o = tileCenter(level.objective.x, level.objective.y);
+    const op = view.toScreen(o.x, o.y);
+    sans(ctx, 'THE SCORE', op.x, op.y - 26, 12, GOLD, 'center', true);
+    // Distance chevron under the label, pointing down at the score.
+    const chY = op.y - 18 + Math.sin(game.time * 3) * 2;
+    ctx.strokeStyle = GOLD;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(op.x - 5, chY);
+    ctx.lineTo(op.x, chY + 4);
+    ctx.lineTo(op.x + 5, chY);
+    ctx.stroke();
   }
-  // Gel wash for the act.
-  const tint = GEL_TINT[level.gel] || GEL_TINT.amber;
-  ctx.fillStyle = tint;
-  ctx.fillRect(ox, oy, COLS * TILE * s, ROWS * TILE * s);
-  // Fog: pale wash plus drifting blobs.
-  if (level.fog || game.cueFx.fog > 0) {
-    ctx.fillStyle = 'rgba(200, 200, 210, 0.10)';
-    ctx.fillRect(ox, oy, COLS * TILE * s, ROWS * TILE * s);
-    ctx.fillStyle = 'rgba(200, 200, 210, 0.08)';
-    for (let i = 0; i < 6; i++) {
-      const fx = ox + ((i * 173 + game.time * 12) % (COLS * TILE * s));
-      const fy = oy + ((i * 131 + game.time * 5) % (ROWS * TILE * s));
-      ctx.beginPath();
-      ctx.ellipse(fx, fy, 90, 40, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-  // Blackout: the sheet drops to lantern pinpricks.
-  if (game.cueFx.blackout > 0) {
-    ctx.fillStyle = 'rgba(5, 4, 3, 0.72)';
-    ctx.fillRect(ox, oy, COLS * TILE * s, ROWS * TILE * s);
-    for (const lamp of game.lamps) {
-      const c = tileCenter(lamp.x, lamp.y);
-      const p = view.toScreen(c.x, c.y);
-      const grad = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, 60);
-      grad.addColorStop(0, 'rgba(255, 180, 80, 0.5)');
-      grad.addColorStop(1, 'rgba(255, 180, 80, 0)');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 60, 0, Math.PI * 2);
-      ctx.fill();
-    }
+  {
+    const ex2 = tileCenter(level.exit.x, level.exit.y);
+    const ep2 = view.toScreen(ex2.x, ex2.y);
+    sans(ctx, 'STAGE DOOR', ep2.x, ep2.y - 26, 12, open ? '#ffd24a' : GOLD, 'center', true);
   }
   // Storm strobe: a brief white flash on the scene change.
   if (level.gel === 'storm' && game.strobe > 0) {
